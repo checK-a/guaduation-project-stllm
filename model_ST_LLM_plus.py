@@ -47,7 +47,9 @@ class BaseModelOutputWithPastAndCrossAttentions:
 class PFA(nn.Module):
     def __init__(self, device="cuda:0", gpt_layers=6, U=1, dropout_rate=0.0):
         super(PFA, self).__init__()
-        self.gpt2 = GPT2Model.from_pretrained("gpt2", attn_implementation="eager",
+        import os
+        gpt2_path = "/root/gpt2_weights" if os.path.exists("/root/gpt2_weights") else "gpt2"
+        self.gpt2 = GPT2Model.from_pretrained(gpt2_path, attn_implementation="eager",
                                               output_attentions=True, output_hidden_states=True)  #attn_implementation="sdpa" OR "eager"
         
         self.gpt2.h = self.gpt2.h[:gpt_layers]
