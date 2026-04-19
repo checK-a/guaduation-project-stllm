@@ -83,6 +83,11 @@ def resolve_dataset_config(args):
         args.input_len = 24
         args.output_len = 4
         args.input_dim = 1
+    elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7":
+        args.num_nodes = 51
+        args.input_len = 24
+        args.output_len = 4
+        args.input_dim = 1
 
     args.window = args.input_len
     args.horizon = args.output_len
@@ -165,14 +170,14 @@ class Trainer:
     def count_trainable_params(self):
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
-    def _prepare_input(self, x, week_idx_x=None):
+    def _prepare_input(self, x, temporal_idx_x=None):
         if self.args.model == "st_llm_plus":
             model_x = x.transpose(1, 3)
-            model_week = week_idx_x
+            model_temporal = temporal_idx_x
         else:
             model_x = x[..., 0]
-            model_week = None
-        return model_x, model_week
+            model_temporal = None
+        return model_x, model_temporal
 
     def _format_output(self, output):
         if self.args.model == "st_llm_plus":
@@ -182,15 +187,19 @@ class Trainer:
     def _format_target(self, y):
         return y[..., 0].transpose(1, 2).unsqueeze(1)
 
-    def _step(self, x, y, week_idx_x=None, training=False):
-        model_x, model_week = self._prepare_input(x, week_idx_x)
+    def _step(self, x, y, temporal_idx_x=None, training=False):
+        model_x, model_temporal = self._prepare_input(x, temporal_idx_x)
         if training:
             self.model.train()
             self.optimizer.zero_grad()
         else:
             self.model.eval()
 
-        output = self.model(model_x, model_week) if self.args.model == "st_llm_plus" else self.model(model_x)[0]
+        output = (
+            self.model(model_x, model_temporal)
+            if self.args.model == "st_llm_plus"
+            else self.model(model_x)[0]
+        )
         if self.args.model == "st_llm_plus":
             output = self._format_output(output)
         else:
@@ -211,18 +220,22 @@ class Trainer:
         wmape = util.WMAPE_torch(predict, real, 0.0).item()
         return loss.item(), mape, rmse, wmape
 
-    def train(self, x, y, week_idx_x=None):
-        return self._step(x, y, week_idx_x=week_idx_x, training=True)
+    def train(self, x, y, temporal_idx_x=None):
+        return self._step(x, y, temporal_idx_x=temporal_idx_x, training=True)
 
-    def eval(self, x, y, week_idx_x=None):
+    def eval(self, x, y, temporal_idx_x=None):
         with torch.no_grad():
-            return self._step(x, y, week_idx_x=week_idx_x, training=False)
+            return self._step(x, y, temporal_idx_x=temporal_idx_x, training=False)
 
-    def predict(self, x, week_idx_x=None):
+    def predict(self, x, temporal_idx_x=None):
         self.model.eval()
         with torch.no_grad():
-            model_x, model_week = self._prepare_input(x, week_idx_x)
-            output = self.model(model_x, model_week) if self.args.model == "st_llm_plus" else self.model(model_x)[0]
+            model_x, model_temporal = self._prepare_input(x, temporal_idx_x)
+            output = (
+                self.model(model_x, model_temporal)
+                if self.args.model == "st_llm_plus"
+                else self.model(model_x)[0]
+            )
             return self._format_output(output)
 
 
@@ -243,12 +256,12 @@ def evaluate_testset(engine, dataloader, scaler, device, output_len):
     realy = torch.Tensor(dataloader["y_test"]).to(device)
     realy = realy[..., 0].transpose(1, 2)
 
-    for _, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["test_loader"].get_iterator()):
+    for _, (x, y, temporal_idx_x, temporal_idx_y) in enumerate(dataloader["test_loader"].get_iterator()):
         testx = torch.Tensor(x).to(device)
-        test_week_idx_x = (
-            torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+        test_temporal_idx_x = (
+            torch.LongTensor(temporal_idx_x).to(device) if temporal_idx_x is not None else None
         )
-        preds = engine.predict(testx, test_week_idx_x)
+        preds = engine.predict(testx, test_temporal_idx_x)
         outputs.append(preds.squeeze(1))
 
     yhat = torch.cat(outputs, dim=0)
@@ -302,13 +315,13 @@ def main():
         train_wmape = []
 
         t1 = time.time()
-        for _, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["train_loader"].get_iterator()):
+        for _, (x, y, temporal_idx_x, temporal_idx_y) in enumerate(dataloader["train_loader"].get_iterator()):
             trainx = torch.Tensor(x).to(device)
             trainy = torch.Tensor(y).to(device)
-            train_week_idx_x = (
-                torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+            train_temporal_idx_x = (
+                torch.LongTensor(temporal_idx_x).to(device) if temporal_idx_x is not None else None
             )
-            metrics = engine.train(trainx, trainy, train_week_idx_x)
+            metrics = engine.train(trainx, trainy, train_temporal_idx_x)
             train_loss.append(metrics[0])
             train_mape.append(metrics[1])
             train_rmse.append(metrics[2])
@@ -324,13 +337,13 @@ def main():
         valid_rmse = []
 
         s1 = time.time()
-        for _, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["val_loader"].get_iterator()):
+        for _, (x, y, temporal_idx_x, temporal_idx_y) in enumerate(dataloader["val_loader"].get_iterator()):
             valx = torch.Tensor(x).to(device)
             valy = torch.Tensor(y).to(device)
-            val_week_idx_x = (
-                torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+            val_temporal_idx_x = (
+                torch.LongTensor(temporal_idx_x).to(device) if temporal_idx_x is not None else None
             )
-            metrics = engine.eval(valx, valy, val_week_idx_x)
+            metrics = engine.eval(valx, valy, val_temporal_idx_x)
             valid_loss.append(metrics[0])
             valid_mape.append(metrics[1])
             valid_rmse.append(metrics[2])

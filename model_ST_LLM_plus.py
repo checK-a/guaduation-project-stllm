@@ -7,16 +7,40 @@ from transformers import GPT2Model
 from typing import Optional, Tuple, Union
 from peft import LoraConfig, get_peft_model
 
-class WeekEmbedding(nn.Module):
-    def __init__(self, num_weeks, features):
-        super(WeekEmbedding, self).__init__()
-        self.week_embedding = nn.Embedding(num_weeks, features)
+class TemporalEmbedding(nn.Module):
+    def __init__(self, features):
+        super(TemporalEmbedding, self).__init__()
+        self.week_embedding = nn.Embedding(54, features)
+        self.day_of_week_embedding = nn.Embedding(7, features)
+        self.day_of_year_embedding = nn.Embedding(366, features)
         nn.init.xavier_uniform_(self.week_embedding.weight)
+        nn.init.xavier_uniform_(self.day_of_week_embedding.weight)
+        nn.init.xavier_uniform_(self.day_of_year_embedding.weight)
 
-    def forward(self, week_idx_x, num_nodes):
-        current_week = week_idx_x[:, -1].long().clamp(0, self.week_embedding.num_embeddings - 1)
-        week_emb = self.week_embedding(current_week)  # [B, features]
-        return week_emb.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_nodes, -1)
+    def forward(self, temporal_idx_x, num_nodes):
+        if temporal_idx_x is None:
+            raise ValueError("temporal_idx_x must not be None when using TemporalEmbedding.")
+
+        if temporal_idx_x.ndim == 2:
+            temporal_idx_x = temporal_idx_x.unsqueeze(-1)
+
+        if temporal_idx_x.size(-1) == 1:
+            current_week = temporal_idx_x[:, -1, 0].long().clamp(
+                0, self.week_embedding.num_embeddings - 1
+            )
+            temporal_emb = self.week_embedding(current_week)
+        else:
+            current_dow = temporal_idx_x[:, -1, 0].long().clamp(
+                0, self.day_of_week_embedding.num_embeddings - 1
+            )
+            current_doy = temporal_idx_x[:, -1, 1].long().clamp(
+                0, self.day_of_year_embedding.num_embeddings - 1
+            )
+            temporal_emb = self.day_of_week_embedding(current_dow) + self.day_of_year_embedding(
+                current_doy
+            )
+
+        return temporal_emb.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_nodes, -1)
 
 from dataclasses import dataclass
 
@@ -243,7 +267,7 @@ class ST_LLM(nn.Module):
             self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1)
         )
 
-        self.week_emb = WeekEmbedding(54, gpt_channel)
+        self.temporal_emb = TemporalEmbedding(gpt_channel)
         self.node_emb = nn.Parameter(torch.empty(self.num_nodes, gpt_channel))
         nn.init.xavier_uniform_(self.node_emb)
 
@@ -262,18 +286,18 @@ class ST_LLM(nn.Module):
     def count_trainable_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def forward(self, history_data, week_idx_x=None):
+    def forward(self, history_data, temporal_idx_x=None):
 
         data = history_data.permute(0, 3, 2, 1)
         B, T, S, F = data.shape
         # print(data.shape) #[64, 12, 250, 3]
 
-        if week_idx_x is None:
-            week_idx_x = torch.zeros(
-                (B, self.input_len), dtype=torch.long, device=history_data.device
+        if temporal_idx_x is None:
+            temporal_idx_x = torch.zeros(
+                (B, self.input_len, 1), dtype=torch.long, device=history_data.device
             )
 
-        time_emb = self.week_emb(week_idx_x, self.num_nodes)
+        time_emb = self.temporal_emb(temporal_idx_x, self.num_nodes)
 
         node_emb = []
         node_emb.append(

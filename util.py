@@ -29,8 +29,8 @@ class DataLoader(object):
         xs,
         ys,
         batch_size,
-        week_idx_xs=None,
-        week_idx_ys=None,
+        temporal_idx_xs=None,
+        temporal_idx_ys=None,
         pad_with_last_sample=True,
     ):
         self.batch_size = batch_size
@@ -41,28 +41,28 @@ class DataLoader(object):
             y_padding = np.repeat(ys[-1:], num_padding, axis=0)
             xs = np.concatenate([xs, x_padding], axis=0)
             ys = np.concatenate([ys, y_padding], axis=0)
-            if week_idx_xs is not None:
-                week_idx_x_padding = np.repeat(week_idx_xs[-1:], num_padding, axis=0)
-                week_idx_xs = np.concatenate([week_idx_xs, week_idx_x_padding], axis=0)
-            if week_idx_ys is not None:
-                week_idx_y_padding = np.repeat(week_idx_ys[-1:], num_padding, axis=0)
-                week_idx_ys = np.concatenate([week_idx_ys, week_idx_y_padding], axis=0)
+            if temporal_idx_xs is not None:
+                temporal_idx_x_padding = np.repeat(temporal_idx_xs[-1:], num_padding, axis=0)
+                temporal_idx_xs = np.concatenate([temporal_idx_xs, temporal_idx_x_padding], axis=0)
+            if temporal_idx_ys is not None:
+                temporal_idx_y_padding = np.repeat(temporal_idx_ys[-1:], num_padding, axis=0)
+                temporal_idx_ys = np.concatenate([temporal_idx_ys, temporal_idx_y_padding], axis=0)
         self.size = len(xs)
         self.num_batch = int(self.size // self.batch_size)
         self.xs = xs
         self.ys = ys
-        self.week_idx_xs = week_idx_xs
-        self.week_idx_ys = week_idx_ys
+        self.temporal_idx_xs = temporal_idx_xs
+        self.temporal_idx_ys = temporal_idx_ys
 
     def shuffle(self):
         permutation = np.random.permutation(self.size)
         xs, ys = self.xs[permutation], self.ys[permutation]
         self.xs = xs
         self.ys = ys
-        if self.week_idx_xs is not None:
-            self.week_idx_xs = self.week_idx_xs[permutation]
-        if self.week_idx_ys is not None:
-            self.week_idx_ys = self.week_idx_ys[permutation]
+        if self.temporal_idx_xs is not None:
+            self.temporal_idx_xs = self.temporal_idx_xs[permutation]
+        if self.temporal_idx_ys is not None:
+            self.temporal_idx_ys = self.temporal_idx_ys[permutation]
 
     def get_iterator(self):
         self.current_ind = 0
@@ -73,13 +73,13 @@ class DataLoader(object):
                 end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
                 x_i = self.xs[start_ind:end_ind, ...]
                 y_i = self.ys[start_ind:end_ind, ...]
-                week_idx_x_i = None
-                week_idx_y_i = None
-                if self.week_idx_xs is not None:
-                    week_idx_x_i = self.week_idx_xs[start_ind:end_ind, ...]
-                if self.week_idx_ys is not None:
-                    week_idx_y_i = self.week_idx_ys[start_ind:end_ind, ...]
-                yield (x_i, y_i, week_idx_x_i, week_idx_y_i)
+                temporal_idx_x_i = None
+                temporal_idx_y_i = None
+                if self.temporal_idx_xs is not None:
+                    temporal_idx_x_i = self.temporal_idx_xs[start_ind:end_ind, ...]
+                if self.temporal_idx_ys is not None:
+                    temporal_idx_y_i = self.temporal_idx_ys[start_ind:end_ind, ...]
+                yield (x_i, y_i, temporal_idx_x_i, temporal_idx_y_i)
                 self.current_ind += 1
 
         return _wrapper()
@@ -104,10 +104,26 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         cat_data = np.load(os.path.join(dataset_dir, category + ".npz"))
         data["x_" + category] = cat_data["x"]
         data["y_" + category] = cat_data["y"]
-        if "week_idx_x" in cat_data:
-            data["week_idx_x_" + category] = cat_data["week_idx_x"]
-        if "week_idx_y" in cat_data:
-            data["week_idx_y_" + category] = cat_data["week_idx_y"]
+        temporal_idx_x = None
+        temporal_idx_y = None
+        if "temporal_idx_x" in cat_data:
+            temporal_idx_x = cat_data["temporal_idx_x"]
+        elif "week_idx_x" in cat_data:
+            temporal_idx_x = cat_data["week_idx_x"][..., None]
+        elif "dow_idx_x" in cat_data and "doy_idx_x" in cat_data:
+            temporal_idx_x = np.stack([cat_data["dow_idx_x"], cat_data["doy_idx_x"]], axis=-1)
+
+        if "temporal_idx_y" in cat_data:
+            temporal_idx_y = cat_data["temporal_idx_y"]
+        elif "week_idx_y" in cat_data:
+            temporal_idx_y = cat_data["week_idx_y"][..., None]
+        elif "dow_idx_y" in cat_data and "doy_idx_y" in cat_data:
+            temporal_idx_y = np.stack([cat_data["dow_idx_y"], cat_data["doy_idx_y"]], axis=-1)
+
+        if temporal_idx_x is not None:
+            data["temporal_idx_x_" + category] = temporal_idx_x.astype(np.int64)
+        if temporal_idx_y is not None:
+            data["temporal_idx_y_" + category] = temporal_idx_y.astype(np.int64)
 
     meta_path = dataset_path / "meta.json"
     if meta_path.exists():
@@ -115,6 +131,7 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
             meta = json.load(f)
         mean = meta["scaler_mean"]
         std = meta["scaler_std"]
+        data["temporal_feature_names"] = meta.get("temporal_feature_names", [])
     else:
         mean = data["x_train"][..., 0].mean()
         std = data["x_train"][..., 0].std()
@@ -130,10 +147,10 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
     random_train = torch.randperm(random_train.size(0))
     data["x_train"] = data["x_train"][random_train, ...]
     data["y_train"] = data["y_train"][random_train, ...]
-    if "week_idx_x_train" in data:
-        data["week_idx_x_train"] = data["week_idx_x_train"][random_train, ...]
-    if "week_idx_y_train" in data:
-        data["week_idx_y_train"] = data["week_idx_y_train"][random_train, ...]
+    if "temporal_idx_x_train" in data:
+        data["temporal_idx_x_train"] = data["temporal_idx_x_train"][random_train, ...]
+    if "temporal_idx_y_train" in data:
+        data["temporal_idx_y_train"] = data["temporal_idx_y_train"][random_train, ...]
 
     # random_test = torch.arange(int(data['x_test'].shape[0]))
     # random_test = torch.randperm(random_test.size(0))
@@ -144,22 +161,22 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         data["x_train"],
         data["y_train"],
         batch_size,
-        week_idx_xs=data.get("week_idx_x_train"),
-        week_idx_ys=data.get("week_idx_y_train"),
+        temporal_idx_xs=data.get("temporal_idx_x_train"),
+        temporal_idx_ys=data.get("temporal_idx_y_train"),
     )
     data["val_loader"] = DataLoader(
         data["x_val"],
         data["y_val"],
         valid_batch_size,
-        week_idx_xs=data.get("week_idx_x_val"),
-        week_idx_ys=data.get("week_idx_y_val"),
+        temporal_idx_xs=data.get("temporal_idx_x_val"),
+        temporal_idx_ys=data.get("temporal_idx_y_val"),
     )
     data["test_loader"] = DataLoader(
         data["x_test"],
         data["y_test"],
         test_batch_size,
-        week_idx_xs=data.get("week_idx_x_test"),
-        week_idx_ys=data.get("week_idx_y_test"),
+        temporal_idx_xs=data.get("temporal_idx_x_test"),
+        temporal_idx_ys=data.get("temporal_idx_y_test"),
     )
     data["scaler"] = scaler
 

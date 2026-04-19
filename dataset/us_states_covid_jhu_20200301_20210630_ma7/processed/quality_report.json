@@ -1,0 +1,371 @@
+{
+  "num_states": 51,
+  "num_days": 487,
+  "start_date": "2020-03-01",
+  "end_date": "2021-06-30",
+  "adjacency_shape": [
+    51,
+    51
+  ],
+  "adjacency_symmetric": true,
+  "adjacency_diagonal_all_ones": true,
+  "per_state": [
+    {
+      "state_name": "Alabama",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 4280.85693359375,
+      "mean_value": 1129.6806640625
+    },
+    {
+      "state_name": "Alaska",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 714.5714111328125,
+      "mean_value": 146.02024841308594
+    },
+    {
+      "state_name": "Arizona",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 9803.7138671875,
+      "mean_value": 1834.05029296875
+    },
+    {
+      "state_name": "Arkansas",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 3085.857177734375,
+      "mean_value": 715.130859375
+    },
+    {
+      "state_name": "California",
+      "num_days": 487,
+      "min_value": 1.285714030265808,
+      "max_value": 45850.4296875,
+      "mean_value": 7978.1865234375
+    },
+    {
+      "state_name": "Colorado",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 5494.4287109375,
+      "mean_value": 1154.4443359375
+    },
+    {
+      "state_name": "Connecticut",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 3017.428466796875,
+      "mean_value": 717.0595703125
+    },
+    {
+      "state_name": "Delaware",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 827.0,
+      "mean_value": 225.30740356445312
+    },
+    {
+      "state_name": "District of Columbia",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 322.4285583496094,
+      "mean_value": 101.27515411376953
+    },
+    {
+      "state_name": "Florida",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 17991.0,
+      "mean_value": 4853.974609375
+    },
+    {
+      "state_name": "Georgia",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 9778.2861328125,
+      "mean_value": 2327.187255859375
+    },
+    {
+      "state_name": "Hawaii",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 254.7142791748047,
+      "mean_value": 77.60751342773438
+    },
+    {
+      "state_name": "Idaho",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 1653.2857666015625,
+      "mean_value": 399.9460144042969
+    },
+    {
+      "state_name": "Illinois",
+      "num_days": 487,
+      "min_value": 0.14285700023174286,
+      "max_value": 12384.0,
+      "mean_value": 2855.9619140625
+    },
+    {
+      "state_name": "Indiana",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 6900.71435546875,
+      "mean_value": 1546.2620849609375
+    },
+    {
+      "state_name": "Iowa",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 4757.28564453125,
+      "mean_value": 767.1375732421875
+    },
+    {
+      "state_name": "Kansas",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 2854.428466796875,
+      "mean_value": 653.44091796875
+    },
+    {
+      "state_name": "Kentucky",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 4415.0,
+      "mean_value": 954.0973510742188
+    },
+    {
+      "state_name": "Louisiana",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 3755.857177734375,
+      "mean_value": 986.070068359375
+    },
+    {
+      "state_name": "Maine",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 624.8571166992188,
+      "mean_value": 141.63156127929688
+    },
+    {
+      "state_name": "Maryland",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 3227.571533203125,
+      "mean_value": 948.9263916015625
+    },
+    {
+      "state_name": "Massachusetts",
+      "num_days": 487,
+      "min_value": 0.14285700023174286,
+      "max_value": 6475.28564453125,
+      "mean_value": 1458.024658203125
+    },
+    {
+      "state_name": "Michigan",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 8344.2861328125,
+      "mean_value": 2052.100341796875
+    },
+    {
+      "state_name": "Minnesota",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 7051.5712890625,
+      "mean_value": 1242.565673828125
+    },
+    {
+      "state_name": "Mississippi",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 2516.0,
+      "mean_value": 659.25927734375
+    },
+    {
+      "state_name": "Missouri",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 5240.71435546875,
+      "mean_value": 1297.7518310546875
+    },
+    {
+      "state_name": "Montana",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 1292.7142333984375,
+      "mean_value": 233.23379516601562
+    },
+    {
+      "state_name": "Nebraska",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 2391.28564453125,
+      "mean_value": 460.66705322265625
+    },
+    {
+      "state_name": "Nevada",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 2762.428466796875,
+      "mean_value": 682.24755859375
+    },
+    {
+      "state_name": "New Hampshire",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 870.1428833007812,
+      "mean_value": 204.3068389892578
+    },
+    {
+      "state_name": "New Jersey",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 6191.4287109375,
+      "mean_value": 2119.171875
+    },
+    {
+      "state_name": "New Mexico",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 2670.571533203125,
+      "mean_value": 421.6922607421875
+    },
+    {
+      "state_name": "New York",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 16611.572265625,
+      "mean_value": 4340.984375
+    },
+    {
+      "state_name": "North Carolina",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 9032.7138671875,
+      "mean_value": 2079.6015625
+    },
+    {
+      "state_name": "North Dakota",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 1440.857177734375,
+      "mean_value": 226.8090362548828
+    },
+    {
+      "state_name": "Ohio",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 12529.0,
+      "mean_value": 2280.678466796875
+    },
+    {
+      "state_name": "Oklahoma",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 4270.85693359375,
+      "mean_value": 941.4461669921875
+    },
+    {
+      "state_name": "Oregon",
+      "num_days": 487,
+      "min_value": 0.14285700023174286,
+      "max_value": 1541.4285888671875,
+      "mean_value": 427.3358459472656
+    },
+    {
+      "state_name": "Pennsylvania",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 10630.857421875,
+      "mean_value": 2516.20458984375
+    },
+    {
+      "state_name": "Rhode Island",
+      "num_days": 487,
+      "min_value": 0.14285700023174286,
+      "max_value": 1380.7142333984375,
+      "mean_value": 313.5473937988281
+    },
+    {
+      "state_name": "South Carolina",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 5338.0,
+      "mean_value": 1224.6119384765625
+    },
+    {
+      "state_name": "South Dakota",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 1458.0,
+      "mean_value": 255.67379760742188
+    },
+    {
+      "state_name": "Tennessee",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 9635.4287109375,
+      "mean_value": 1775.905517578125
+    },
+    {
+      "state_name": "Texas",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 26112.857421875,
+      "mean_value": 6230.98291015625
+    },
+    {
+      "state_name": "Utah",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 3542.142822265625,
+      "mean_value": 850.0589599609375
+    },
+    {
+      "state_name": "Vermont",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 189.85714721679688,
+      "mean_value": 50.10061264038086
+    },
+    {
+      "state_name": "Virginia",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 6166.28564453125,
+      "mean_value": 1396.389404296875
+    },
+    {
+      "state_name": "Washington",
+      "num_days": 487,
+      "min_value": 1.4285709857940674,
+      "max_value": 3662.28564453125,
+      "mean_value": 925.2904052734375
+    },
+    {
+      "state_name": "West Virginia",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 1524.0,
+      "mean_value": 336.51629638671875
+    },
+    {
+      "state_name": "Wisconsin",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 7045.14306640625,
+      "mean_value": 1390.8743896484375
+    },
+    {
+      "state_name": "Wyoming",
+      "num_days": 487,
+      "min_value": 0.0,
+      "max_value": 891.1428833007812,
+      "mean_value": 127.42622375488281
+    }
+  ]
+}
