@@ -72,7 +72,7 @@ def run_inference(model_name, model_dir, device, mean, std):
     x[..., 0] = (x[..., 0] - mean) / std
 
     import util
-    adj_mx = util.load_graph_data(f"dataset/{DATASET}/adj_mx.pkl")
+    adj_mx = util.load_graph_data(f"dataset/{DATASET}/{DATASET}/adj_mx.pkl")
 
     # build args namespace
     args = SimpleNamespace(
