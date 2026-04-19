@@ -1,0 +1,423 @@
+{
+  "num_states": 51,
+  "num_weeks": 523,
+  "start_epiweek": "2013W40",
+  "end_epiweek": "2023W40",
+  "num_imputed_total": 576,
+  "adjacency_shape": [
+    51,
+    51
+  ],
+  "adjacency_symmetric": true,
+  "adjacency_diagonal_all_ones": true,
+  "per_state": [
+    {
+      "state_name": "Alabama",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.5961250066757202,
+      "max_ili": 19.417699813842773,
+      "mean_ili": 2.7801125049591064
+    },
+    {
+      "state_name": "Alaska",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 11.722100257873535,
+      "mean_ili": 1.7951877117156982
+    },
+    {
+      "state_name": "Arizona",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.35189899802207947,
+      "max_ili": 8.49822998046875,
+      "mean_ili": 1.9059078693389893
+    },
+    {
+      "state_name": "Arkansas",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 11.053199768066406,
+      "mean_ili": 2.1153950691223145
+    },
+    {
+      "state_name": "California",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.7453060150146484,
+      "max_ili": 8.855660438537598,
+      "mean_ili": 2.204162359237671
+    },
+    {
+      "state_name": "Colorado",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 9.478750228881836,
+      "mean_ili": 1.7622096538543701
+    },
+    {
+      "state_name": "Connecticut",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 10.209099769592285,
+      "mean_ili": 1.9106472730636597
+    },
+    {
+      "state_name": "Delaware",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 6.281489849090576,
+      "mean_ili": 0.6784119606018066
+    },
+    {
+      "state_name": "District of Columbia",
+      "num_weeks": 523,
+      "num_imputed": 1,
+      "min_ili": 0.0,
+      "max_ili": 16.34760093688965,
+      "mean_ili": 4.423276424407959
+    },
+    {
+      "state_name": "Florida",
+      "num_weeks": 523,
+      "num_imputed": 418,
+      "min_ili": 1.9093199968338013,
+      "max_ili": 6.748050212860107,
+      "mean_ili": 2.847762107849121
+    },
+    {
+      "state_name": "Georgia",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.029061300680041313,
+      "max_ili": 15.45359992980957,
+      "mean_ili": 2.6599037647247314
+    },
+    {
+      "state_name": "Hawaii",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.1049870029091835,
+      "max_ili": 16.144500732421875,
+      "mean_ili": 2.559573173522949
+    },
+    {
+      "state_name": "Idaho",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 9.565389633178711,
+      "mean_ili": 1.306708812713623
+    },
+    {
+      "state_name": "Illinois",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.3915489912033081,
+      "max_ili": 7.4019999504089355,
+      "mean_ili": 1.8798744678497314
+    },
+    {
+      "state_name": "Indiana",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.06695680320262909,
+      "max_ili": 8.96498966217041,
+      "mean_ili": 1.7436937093734741
+    },
+    {
+      "state_name": "Iowa",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 10.821599960327148,
+      "mean_ili": 0.9768576622009277
+    },
+    {
+      "state_name": "Kansas",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 11.655500411987305,
+      "mean_ili": 1.900159478187561
+    },
+    {
+      "state_name": "Kentucky",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 12.292499542236328,
+      "mean_ili": 1.79775869846344
+    },
+    {
+      "state_name": "Louisiana",
+      "num_weeks": 523,
+      "num_imputed": 157,
+      "min_ili": 0.5365449786186218,
+      "max_ili": 12.892600059509277,
+      "mean_ili": 2.554030418395996
+    },
+    {
+      "state_name": "Maine",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 9.697290420532227,
+      "mean_ili": 1.1248880624771118
+    },
+    {
+      "state_name": "Maryland",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.025608200579881668,
+      "max_ili": 8.077179908752441,
+      "mean_ili": 1.865260124206543
+    },
+    {
+      "state_name": "Massachusetts",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.3336769938468933,
+      "max_ili": 8.896240234375,
+      "mean_ili": 1.4373905658721924
+    },
+    {
+      "state_name": "Michigan",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.09537430107593536,
+      "max_ili": 5.630080223083496,
+      "mean_ili": 1.194705843925476
+    },
+    {
+      "state_name": "Minnesota",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.09505700320005417,
+      "max_ili": 9.710590362548828,
+      "mean_ili": 1.725311279296875
+    },
+    {
+      "state_name": "Mississippi",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.6939629912376404,
+      "max_ili": 13.887800216674805,
+      "mean_ili": 3.148685932159424
+    },
+    {
+      "state_name": "Missouri",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 11.2947998046875,
+      "mean_ili": 1.7405644655227661
+    },
+    {
+      "state_name": "Montana",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 5.1882100105285645,
+      "mean_ili": 0.7413396239280701
+    },
+    {
+      "state_name": "Nebraska",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 11.517800331115723,
+      "mean_ili": 1.8911806344985962
+    },
+    {
+      "state_name": "Nevada",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.06534119695425034,
+      "max_ili": 4.120230197906494,
+      "mean_ili": 1.2321550846099854
+    },
+    {
+      "state_name": "New Hampshire",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 6.6864800453186035,
+      "mean_ili": 0.640046238899231
+    },
+    {
+      "state_name": "New Jersey",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.14727500081062317,
+      "max_ili": 16.131799697875977,
+      "mean_ili": 2.8657712936401367
+    },
+    {
+      "state_name": "New Mexico",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.36737701296806335,
+      "max_ili": 16.951200485229492,
+      "mean_ili": 2.585611581802368
+    },
+    {
+      "state_name": "New York",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.4740803837776184,
+      "max_ili": 12.011448860168457,
+      "mean_ili": 2.292233467102051
+    },
+    {
+      "state_name": "North Carolina",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.04429680109024048,
+      "max_ili": 10.26710033416748,
+      "mean_ili": 1.7427661418914795
+    },
+    {
+      "state_name": "North Dakota",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 14.270299911499023,
+      "mean_ili": 1.5483968257904053
+    },
+    {
+      "state_name": "Ohio",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.16417400538921356,
+      "max_ili": 10.29640007019043,
+      "mean_ili": 1.450595498085022
+    },
+    {
+      "state_name": "Oklahoma",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 15.503899574279785,
+      "mean_ili": 2.625293731689453
+    },
+    {
+      "state_name": "Oregon",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 6.72376012802124,
+      "mean_ili": 1.2795517444610596
+    },
+    {
+      "state_name": "Pennsylvania",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.3464199900627136,
+      "max_ili": 7.030600070953369,
+      "mean_ili": 1.574109673500061
+    },
+    {
+      "state_name": "Rhode Island",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 9.114740371704102,
+      "mean_ili": 0.9982308149337769
+    },
+    {
+      "state_name": "South Carolina",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 14.63860034942627,
+      "mean_ili": 2.196495294570923
+    },
+    {
+      "state_name": "South Dakota",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 5.384550094604492,
+      "mean_ili": 1.1817467212677002
+    },
+    {
+      "state_name": "Tennessee",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.02299639955163002,
+      "max_ili": 14.767600059509277,
+      "mean_ili": 2.079066038131714
+    },
+    {
+      "state_name": "Texas",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.8113120198249817,
+      "max_ili": 15.271100044250488,
+      "mean_ili": 3.5204639434814453
+    },
+    {
+      "state_name": "Utah",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 7.494609832763672,
+      "mean_ili": 1.8498523235321045
+    },
+    {
+      "state_name": "Vermont",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 7.354879856109619,
+      "mean_ili": 1.4436650276184082
+    },
+    {
+      "state_name": "Virginia",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 10.928999900817871,
+      "mean_ili": 2.3781018257141113
+    },
+    {
+      "state_name": "Washington",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 12.933199882507324,
+      "mean_ili": 1.2530303001403809
+    },
+    {
+      "state_name": "West Virginia",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.024588100612163544,
+      "max_ili": 8.209250450134277,
+      "mean_ili": 1.4675898551940918
+    },
+    {
+      "state_name": "Wisconsin",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.04262569919228554,
+      "max_ili": 7.271749973297119,
+      "mean_ili": 1.4889476299285889
+    },
+    {
+      "state_name": "Wyoming",
+      "num_weeks": 523,
+      "num_imputed": 0,
+      "min_ili": 0.0,
+      "max_ili": 9.076780319213867,
+      "mean_ili": 1.4062302112579346
+    }
+  ]
+}

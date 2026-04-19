@@ -39,6 +39,12 @@ parser.add_argument(
     default=100,
     help="quit if no improvement after this many iterations"
     )
+parser.add_argument(
+    "--min_epochs",
+    type=int,
+    default=200,
+    help="minimum number of epochs to train before early stopping can trigger"
+    )
 args = parser.parse_args()
 adj_mx = load_graph_data(f"dataset/{args.data}/{args.data}/adj_mx.pkl") # nyc
 
@@ -72,10 +78,10 @@ class trainer:
         print("The number of trainable parameters: {}".format(self.model.count_trainable_params()))
         print(self.model)
 
-    def train(self, input, real_val):
+    def train(self, input, real_val, week_idx_x=None):
         self.model.train()
         self.optimizer.zero_grad()
-        output = self.model(input)
+        output = self.model(input, week_idx_x)
         output = output.transpose(1, 3)
         real = torch.unsqueeze(real_val, dim=1)
         predict = self.scaler.inverse_transform(output)
@@ -89,9 +95,9 @@ class trainer:
         wmape = util.WMAPE_torch(predict, real, 0.0).item()
         return loss.item(), mape, rmse, wmape
 
-    def eval(self, input, real_val):
+    def eval(self, input, real_val, week_idx_x=None):
         self.model.eval()
-        output = self.model(input)
+        output = self.model(input, week_idx_x)
         output = output.transpose(1, 3)
         real = torch.unsqueeze(real_val, dim=1)
         predict = self.scaler.inverse_transform(output)
@@ -110,6 +116,33 @@ def seed_it(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = True  
     torch.manual_seed(seed)
+
+def evaluate_testset(engine, dataloader, scaler, device, output_len):
+    engine.model.eval()
+    outputs = []
+    realy = torch.Tensor(dataloader["y_test"]).to(device)
+    realy = realy.transpose(1, 3)[:, 0, :, :]
+
+    with torch.no_grad():
+        for iter, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["test_loader"].get_iterator()):
+            testx = torch.Tensor(x).to(device)
+            testx = testx.transpose(1, 3)
+            test_week_idx_x = (
+                torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+            )
+            preds = engine.model(testx, test_week_idx_x).transpose(1, 3)
+            outputs.append(preds.squeeze())
+
+    yhat = torch.cat(outputs, dim=0)
+    yhat = yhat[: realy.size(0), ...]
+
+    horizon_metrics = []
+    for i in range(output_len):
+        pred = scaler.inverse_transform(yhat[:, :, i])
+        real = realy[:, :, i]
+        horizon_metrics.append(util.metric(pred, real))
+
+    return horizon_metrics
 
 def main():
     seed_it(6666)
@@ -130,6 +163,13 @@ def main():
     elif args.data == "taxi_pick":
         args.data = "dataset//" + args.data + "//" + args.data
         args.num_nodes = 266
+
+    elif args.data == "ili_us_states":
+        args.data = "dataset//" + args.data + "//" + args.data
+        args.num_nodes = 51
+        args.input_len = 24
+        args.output_len = 4
+        args.input_dim = 1
     
     device = torch.device(args.device)
     dataloader = util.load_dataset(
@@ -137,8 +177,8 @@ def main():
     )
     scaler = dataloader["scaler"]
 
-    loss = 9999999
-    test_log = 999999
+    best_valid_loss = float("inf")
+    bestid = None
     epochs_since_best_mae = 0
     path = args.save + data + "/"
 
@@ -175,12 +215,15 @@ def main():
 
         t1 = time.time()
         # dataloader['train_loader'].shuffle()
-        for iter, (x, y) in enumerate(dataloader["train_loader"].get_iterator()):
+        for iter, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["train_loader"].get_iterator()):
             trainx = torch.Tensor(x).to(device)  # 64 12 250 1
             trainx = trainx.transpose(1, 3)
             trainy = torch.Tensor(y).to(device)
             trainy = trainy.transpose(1, 3)
-            metrics = engine.train(trainx, trainy[:, 0, :, :])
+            train_week_idx_x = (
+                torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+            )
+            metrics = engine.train(trainx, trainy[:, 0, :, :], train_week_idx_x)
             train_loss.append(metrics[0])
             train_mape.append(metrics[1])
             train_rmse.append(metrics[2])
@@ -198,12 +241,15 @@ def main():
         valid_rmse = []
 
         s1 = time.time()
-        for iter, (x, y) in enumerate(dataloader["val_loader"].get_iterator()):
+        for iter, (x, y, week_idx_x, week_idx_y) in enumerate(dataloader["val_loader"].get_iterator()):
             testx = torch.Tensor(x).to(device)
             testx = testx.transpose(1, 3)
             testy = torch.Tensor(y).to(device)
             testy = testy.transpose(1, 3)
-            metrics = engine.eval(testx, testy[:, 0, :, :])
+            val_week_idx_x = (
+                torch.LongTensor(week_idx_x).to(device) if week_idx_x is not None else None
+            )
+            metrics = engine.eval(testx, testy[:, 0, :, :], val_week_idx_x)
             valid_loss.append(metrics[0])
             valid_mape.append(metrics[1])
             valid_rmse.append(metrics[2])
@@ -252,54 +298,14 @@ def main():
             flush=True,
         )
 
-        if mvalid_loss < loss:
+        if mvalid_loss < best_valid_loss:
             print("###Update tasks appear###")
-            if i <= 100:
-                # It is not necessary to print the results of the test set when epoch is less than 100, because the model has not yet converged.
-                loss = mvalid_loss
-                torch.save(engine.model.state_dict(), path + "best_model.pth")
-                bestid = i
-                epochs_since_best_mae = 0
-                print("Updating! Valid Loss:{:.4f}".format(mvalid_loss), end=", ")
-                print("epoch: ", i)
-            
-            else:
-                outputs = []
-                realy = torch.Tensor(dataloader["y_test"]).to(device)
-                realy = realy.transpose(1, 3)[:, 0, :, :]
-
-                for iter, (x, y) in enumerate(dataloader["test_loader"].get_iterator()):
-                    testx = torch.Tensor(x).to(device)
-                    testx = testx.transpose(1, 3)
-                    with torch.no_grad():
-                        preds = engine.model(testx).transpose(1, 3)
-                    outputs.append(preds.squeeze())
-
-                yhat = torch.cat(outputs, dim=0)
-                yhat = yhat[: realy.size(0), ...]
-
-                amae = []
-                amape = []
-                awmape = []
-                armse = []
-
-                for j in range(args.output_len):
-                    pred = scaler.inverse_transform(yhat[:, :, j])
-                    real = realy[:, :, j]
-                    metrics = util.metric(pred, real)
-
-                    amae.append(metrics[0])
-                    amape.append(metrics[1])
-                    armse.append(metrics[2])
-                    awmape.append(metrics[3])
-
-                if np.mean(amae) < test_log:
-                    test_log = np.mean(amae)
-                    print(f"Test low! Updating! Test Loss: {test_log:.4f}, Valid Loss: {mvalid_loss:.4f}, epoch: {i}")
-                else:
-                    epochs_since_best_mae += 1
-                    print("No update")
-
+            best_valid_loss = mvalid_loss
+            torch.save(engine.model.state_dict(), path + "best_model.pth")
+            bestid = i
+            epochs_since_best_mae = 0
+            print("Updating! Valid Loss:{:.4f}".format(mvalid_loss), end=", ")
+            print("epoch: ", i)
         else:
             epochs_since_best_mae += 1
             print("No update")
@@ -308,7 +314,7 @@ def main():
         train_csv.round(8).to_csv(f"{path}/train.csv")
 
         # Early stop
-        if epochs_since_best_mae >= args.es_patience and i >= 200:
+        if i >= args.min_epochs and epochs_since_best_mae >= args.es_patience:
             break
 
     # Output consumption
@@ -318,23 +324,9 @@ def main():
     # test
     print("Training ends")
     print("The epoch of the best result：", bestid)
-    print("The valid loss of the best model", str(round(his_loss[bestid - 1], 4)))
+    print("The valid loss of the best model", str(round(best_valid_loss, 4)))
 
     engine.model.load_state_dict(torch.load(path + "best_model.pth"))
-    outputs = []
-    realy = torch.Tensor(dataloader["y_test"]).to(device)
-    realy = realy.transpose(1, 3)[:, 0, :, :]
-
-    for iter, (x, y) in enumerate(dataloader["test_loader"].get_iterator()):
-        testx = torch.Tensor(x).to(device)
-        testx = testx.transpose(1, 3)
-        with torch.no_grad():
-            preds = engine.model(testx).transpose(1, 3)
-        outputs.append(preds.squeeze())
-
-    yhat = torch.cat(outputs, dim=0)
-    yhat = yhat[: realy.size(0), ...]
-
     amae = []
     amape = []
     armse = []
@@ -342,10 +334,11 @@ def main():
 
     test_m = []
 
-    for i in range(args.output_len):
-        pred = scaler.inverse_transform(yhat[:, :, i])
-        real = realy[:, :, i]
-        metrics = util.metric(pred, real)
+    horizon_metrics = evaluate_testset(
+        engine, dataloader, scaler, device, args.output_len
+    )
+
+    for i, metrics in enumerate(horizon_metrics):
         log = "Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}, Test WMAPE: {:.4f}"
         print(log.format(i + 1, metrics[0], metrics[2], metrics[1], metrics[3]))
 

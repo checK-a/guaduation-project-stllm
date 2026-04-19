@@ -1,0 +1,110 @@
+state_name,state_abbr,neighbor_name,neighbor_abbr
+Alabama,AL,Georgia,GA
+Alabama,AL,Mississippi,MS
+Arkansas,AR,Missouri,MO
+Arkansas,AR,Mississippi,MS
+Arkansas,AR,Oklahoma,OK
+Arizona,AZ,Utah,UT
+California,CA,Arizona,AZ
+California,CA,Nevada,NV
+California,CA,Oregon,OR
+Colorado,CO,Arizona,AZ
+Colorado,CO,Kansas,KS
+Colorado,CO,Oklahoma,OK
+Colorado,CO,Utah,UT
+Connecticut,CT,Massachusetts,MA
+Connecticut,CT,Rhode Island,RI
+District of Columbia,DC,Maryland,MD
+District of Columbia,DC,Virginia,VA
+Delaware,DE,Maryland,MD
+Delaware,DE,New Jersey,NJ
+Delaware,DE,Pennsylvania,PA
+Florida,FL,Alabama,AL
+Florida,FL,Georgia,GA
+Georgia,GA,South Carolina,SC
+Iowa,IA,Minnesota,MN
+Iowa,IA,Missouri,MO
+Iowa,IA,South Dakota,SD
+Idaho,ID,Montana,MT
+Idaho,ID,Oregon,OR
+Idaho,ID,Utah,UT
+Illinois,IL,Iowa,IA
+Illinois,IL,Indiana,IN
+Illinois,IL,Kentucky,KY
+Illinois,IL,Missouri,MO
+Indiana,IN,Kentucky,KY
+Indiana,IN,Michigan,MI
+Indiana,IN,Ohio,OH
+Louisiana,LA,Arkansas,AR
+Louisiana,LA,Mississippi,MS
+Massachusetts,MA,Rhode Island,RI
+Minnesota,MN,South Dakota,SD
+Missouri,MO,Kansas,KS
+Missouri,MO,Kentucky,KY
+Montana,MT,South Dakota,SD
+North Carolina,NC,Georgia,GA
+North Carolina,NC,South Carolina,SC
+North Carolina,NC,Tennessee,TN
+North Carolina,NC,Virginia,VA
+North Dakota,ND,Minnesota,MN
+North Dakota,ND,Montana,MT
+North Dakota,ND,South Dakota,SD
+Nebraska,NE,Colorado,CO
+Nebraska,NE,Iowa,IA
+Nebraska,NE,Kansas,KS
+Nebraska,NE,Missouri,MO
+Nebraska,NE,South Dakota,SD
+New Hampshire,NH,Massachusetts,MA
+New Hampshire,NH,Maine,ME
+New Hampshire,NH,Vermont,VT
+New Jersey,NJ,New York,NY
+New Jersey,NJ,Pennsylvania,PA
+New Mexico,NM,Arizona,AZ
+New Mexico,NM,Colorado,CO
+New Mexico,NM,Oklahoma,OK
+New Mexico,NM,Texas,TX
+New Mexico,NM,Utah,UT
+Nevada,NV,Arizona,AZ
+Nevada,NV,Idaho,ID
+Nevada,NV,Oregon,OR
+Nevada,NV,Utah,UT
+New York,NY,Connecticut,CT
+New York,NY,Massachusetts,MA
+New York,NY,Pennsylvania,PA
+New York,NY,Vermont,VT
+Ohio,OH,Kentucky,KY
+Ohio,OH,Michigan,MI
+Oklahoma,OK,Kansas,KS
+Oklahoma,OK,Missouri,MO
+Pennsylvania,PA,Maryland,MD
+Pennsylvania,PA,Ohio,OH
+Tennessee,TN,Alabama,AL
+Tennessee,TN,Arkansas,AR
+Tennessee,TN,Georgia,GA
+Tennessee,TN,Kentucky,KY
+Tennessee,TN,Missouri,MO
+Tennessee,TN,Mississippi,MS
+Tennessee,TN,Virginia,VA
+Texas,TX,Arkansas,AR
+Texas,TX,Louisiana,LA
+Texas,TX,Oklahoma,OK
+Virginia,VA,Kentucky,KY
+Virginia,VA,Maryland,MD
+Vermont,VT,Massachusetts,MA
+Washington,WA,Idaho,ID
+Washington,WA,Oregon,OR
+Wisconsin,WI,Iowa,IA
+Wisconsin,WI,Illinois,IL
+Wisconsin,WI,Michigan,MI
+Wisconsin,WI,Minnesota,MN
+West Virginia,WV,Kentucky,KY
+West Virginia,WV,Maryland,MD
+West Virginia,WV,Ohio,OH
+West Virginia,WV,Pennsylvania,PA
+West Virginia,WV,Virginia,VA
+Wyoming,WY,Colorado,CO
+Wyoming,WY,Idaho,ID
+Wyoming,WY,Montana,MT
+Wyoming,WY,Nebraska,NE
+Wyoming,WY,South Dakota,SD
+Wyoming,WY,Utah,UT

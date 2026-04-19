@@ -1,0 +1,122 @@
+{
+  "dataset_name": "ili_us_states",
+  "start_epiweek": "2013W40",
+  "end_epiweek": "2023W40",
+  "num_nodes": 51,
+  "input_len": 24,
+  "output_len": 4,
+  "feature_names": [
+    "weighted_ili"
+  ],
+  "state_order": [
+    "Alabama",
+    "Alaska",
+    "Arizona",
+    "Arkansas",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "Delaware",
+    "District of Columbia",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Idaho",
+    "Illinois",
+    "Indiana",
+    "Iowa",
+    "Kansas",
+    "Kentucky",
+    "Louisiana",
+    "Maine",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Mississippi",
+    "Missouri",
+    "Montana",
+    "Nebraska",
+    "Nevada",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Ohio",
+    "Oklahoma",
+    "Oregon",
+    "Pennsylvania",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Vermont",
+    "Virginia",
+    "Washington",
+    "West Virginia",
+    "Wisconsin",
+    "Wyoming"
+  ],
+  "train_ratio": 0.7,
+  "val_ratio": 0.1,
+  "test_ratio": 0.20000000000000004,
+  "scaler_mean": 1.922227382659912,
+  "scaler_std": 1.9896621704101562,
+  "splits": {
+    "train": {
+      "num_samples": 343,
+      "first_sample": {
+        "sample_id": 0,
+        "input_start": "2013W40",
+        "input_end": "2014W11",
+        "target_start": "2014W12",
+        "target_end": "2014W15"
+      },
+      "last_sample": {
+        "sample_id": 342,
+        "input_start": "2020W17",
+        "input_end": "2020W40",
+        "target_start": "2020W41",
+        "target_end": "2020W44"
+      }
+    },
+    "val": {
+      "num_samples": 49,
+      "first_sample": {
+        "sample_id": 346,
+        "input_start": "2020W21",
+        "input_end": "2020W44",
+        "target_start": "2020W45",
+        "target_end": "2020W48"
+      },
+      "last_sample": {
+        "sample_id": 394,
+        "input_start": "2021W16",
+        "input_end": "2021W39",
+        "target_start": "2021W40",
+        "target_end": "2021W43"
+      }
+    },
+    "test": {
+      "num_samples": 98,
+      "first_sample": {
+        "sample_id": 398,
+        "input_start": "2021W20",
+        "input_end": "2021W43",
+        "target_start": "2021W44",
+        "target_end": "2021W47"
+      },
+      "last_sample": {
+        "sample_id": 495,
+        "input_start": "2023W13",
+        "input_end": "2023W36",
+        "target_start": "2023W37",
+        "target_end": "2023W40"
+      }
+    }
+  }
+}

@@ -4,3 +4,4 @@ __pycache__/
 logs/
 __MACOSX/
 *.zip
+tmp_cdc_ili_test/

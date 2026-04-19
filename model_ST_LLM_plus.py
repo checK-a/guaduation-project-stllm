@@ -7,32 +7,16 @@ from transformers import GPT2Model
 from typing import Optional, Tuple, Union
 from peft import LoraConfig, get_peft_model
 
-class TemporalEmbedding(nn.Module):
-    def __init__(self, time, features):
-        super(TemporalEmbedding, self).__init__()
+class WeekEmbedding(nn.Module):
+    def __init__(self, num_weeks, features):
+        super(WeekEmbedding, self).__init__()
+        self.week_embedding = nn.Embedding(num_weeks, features)
+        nn.init.xavier_uniform_(self.week_embedding.weight)
 
-        self.time = time
-        self.time_day = nn.Parameter(torch.empty(time, features))
-        nn.init.xavier_uniform_(self.time_day)
-
-        self.time_week = nn.Parameter(torch.empty(7, features))
-        nn.init.xavier_uniform_(self.time_week)
-
-    def forward(self, x):
-        day_emb = x[..., 1]
-        time_day = self.time_day[
-            (day_emb[:, -1, :] * self.time).type(torch.LongTensor)
-        ]
-        time_day = time_day.transpose(1, 2).unsqueeze(-1)
-
-        week_emb = x[..., 2]
-        time_week = self.time_week[
-            (week_emb[:, -1, :]).type(torch.LongTensor)
-        ]
-        time_week = time_week.transpose(1, 2).unsqueeze(-1)
-
-        tem_emb = time_day + time_week
-        return tem_emb
+    def forward(self, week_idx_x, num_nodes):
+        current_week = week_idx_x[:, -1].long().clamp(0, self.week_embedding.num_embeddings - 1)
+        week_emb = self.week_embedding(current_week)  # [B, features]
+        return week_emb.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_nodes, -1)
 
 from dataclasses import dataclass
 
@@ -251,11 +235,6 @@ class ST_LLM(nn.Module):
         self.llm_layer = llm_layer
         self.U = U
         self.dropout_rate = 0.1
-        
-        if num_nodes == 170 or num_nodes == 207:
-            time = 288
-        elif num_nodes == 250 or num_nodes == 266:
-            time = 48
 
         gpt_channel = 256
         to_gpt_channel = 768
@@ -264,7 +243,7 @@ class ST_LLM(nn.Module):
             self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1)
         )
 
-        self.Temb = TemporalEmbedding(time, gpt_channel)
+        self.week_emb = WeekEmbedding(54, gpt_channel)
         self.node_emb = nn.Parameter(torch.empty(self.num_nodes, gpt_channel))
         nn.init.xavier_uniform_(self.node_emb)
 
@@ -283,15 +262,18 @@ class ST_LLM(nn.Module):
     def count_trainable_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def forward(self, history_data):
+    def forward(self, history_data, week_idx_x=None):
 
         data = history_data.permute(0, 3, 2, 1)
         B, T, S, F = data.shape
         # print(data.shape) #[64, 12, 250, 3]
-        
-        #Temporal Embedding
-        tem_emb = self.Temb(data)
-        # print(tem_emb.shape) #[64, 256, 250, 1]
+
+        if week_idx_x is None:
+            week_idx_x = torch.zeros(
+                (B, self.input_len), dtype=torch.long, device=history_data.device
+            )
+
+        time_emb = self.week_emb(week_idx_x, self.num_nodes)
 
         node_emb = []
         node_emb.append(
@@ -308,7 +290,7 @@ class ST_LLM(nn.Module):
         input_data = self.start_conv(input_data)
         # print(input_data.shape)#[64, 36, 250, 1]
 
-        data_st = torch.cat([input_data] + [tem_emb] + node_emb, dim=1)
+        data_st = torch.cat([input_data] + [time_emb] + node_emb, dim=1)
         # print(f"After cat: data_st shape: {data_st.shape}, type: {type(data_st)}")
 
         data_st = self.in_layer(data_st)

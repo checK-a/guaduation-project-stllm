@@ -3,6 +3,8 @@ import os
 import scipy.sparse as sp
 import torch
 import pickle
+import json
+from pathlib import Path
 
 def load_graph_data(pkl_filename):
     adj_mx = load_pickle(pkl_filename)
@@ -22,7 +24,15 @@ def load_pickle(pickle_file):
 
 
 class DataLoader(object):
-    def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
+    def __init__(
+        self,
+        xs,
+        ys,
+        batch_size,
+        week_idx_xs=None,
+        week_idx_ys=None,
+        pad_with_last_sample=True,
+    ):
         self.batch_size = batch_size
         self.current_ind = 0
         if pad_with_last_sample:
@@ -31,16 +41,28 @@ class DataLoader(object):
             y_padding = np.repeat(ys[-1:], num_padding, axis=0)
             xs = np.concatenate([xs, x_padding], axis=0)
             ys = np.concatenate([ys, y_padding], axis=0)
+            if week_idx_xs is not None:
+                week_idx_x_padding = np.repeat(week_idx_xs[-1:], num_padding, axis=0)
+                week_idx_xs = np.concatenate([week_idx_xs, week_idx_x_padding], axis=0)
+            if week_idx_ys is not None:
+                week_idx_y_padding = np.repeat(week_idx_ys[-1:], num_padding, axis=0)
+                week_idx_ys = np.concatenate([week_idx_ys, week_idx_y_padding], axis=0)
         self.size = len(xs)
         self.num_batch = int(self.size // self.batch_size)
         self.xs = xs
         self.ys = ys
+        self.week_idx_xs = week_idx_xs
+        self.week_idx_ys = week_idx_ys
 
     def shuffle(self):
         permutation = np.random.permutation(self.size)
         xs, ys = self.xs[permutation], self.ys[permutation]
         self.xs = xs
         self.ys = ys
+        if self.week_idx_xs is not None:
+            self.week_idx_xs = self.week_idx_xs[permutation]
+        if self.week_idx_ys is not None:
+            self.week_idx_ys = self.week_idx_ys[permutation]
 
     def get_iterator(self):
         self.current_ind = 0
@@ -51,7 +73,13 @@ class DataLoader(object):
                 end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
                 x_i = self.xs[start_ind:end_ind, ...]
                 y_i = self.ys[start_ind:end_ind, ...]
-                yield (x_i, y_i)
+                week_idx_x_i = None
+                week_idx_y_i = None
+                if self.week_idx_xs is not None:
+                    week_idx_x_i = self.week_idx_xs[start_ind:end_ind, ...]
+                if self.week_idx_ys is not None:
+                    week_idx_y_i = self.week_idx_ys[start_ind:end_ind, ...]
+                yield (x_i, y_i, week_idx_x_i, week_idx_y_i)
                 self.current_ind += 1
 
         return _wrapper()
@@ -71,13 +99,28 @@ class StandardScaler:
 
 def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size=None):
     data = {}
+    dataset_path = Path(dataset_dir)
     for category in ["train", "val", "test"]:
         cat_data = np.load(os.path.join(dataset_dir, category + ".npz"))
         data["x_" + category] = cat_data["x"]
         data["y_" + category] = cat_data["y"]
-    scaler = StandardScaler(
-        mean=data["x_train"][..., 0].mean(), std=data["x_train"][..., 0].std()
-    )
+        if "week_idx_x" in cat_data:
+            data["week_idx_x_" + category] = cat_data["week_idx_x"]
+        if "week_idx_y" in cat_data:
+            data["week_idx_y_" + category] = cat_data["week_idx_y"]
+
+    meta_path = dataset_path / "meta.json"
+    if meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        mean = meta["scaler_mean"]
+        std = meta["scaler_std"]
+    else:
+        mean = data["x_train"][..., 0].mean()
+        std = data["x_train"][..., 0].std()
+    if std == 0:
+        std = 1.0
+    scaler = StandardScaler(mean=mean, std=std)
     # Data format
     for category in ["train", "val", "test"]:
         data["x_" + category][..., 0] = scaler.transform(data["x_" + category][..., 0])
@@ -87,20 +130,37 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
     random_train = torch.randperm(random_train.size(0))
     data["x_train"] = data["x_train"][random_train, ...]
     data["y_train"] = data["y_train"][random_train, ...]
-
-    random_val = torch.arange(int(data["x_val"].shape[0]))
-    random_val = torch.randperm(random_val.size(0))
-    data["x_val"] = data["x_val"][random_val, ...]
-    data["y_val"] = data["y_val"][random_val, ...]
+    if "week_idx_x_train" in data:
+        data["week_idx_x_train"] = data["week_idx_x_train"][random_train, ...]
+    if "week_idx_y_train" in data:
+        data["week_idx_y_train"] = data["week_idx_y_train"][random_train, ...]
 
     # random_test = torch.arange(int(data['x_test'].shape[0]))
     # random_test = torch.randperm(random_test.size(0))
     # data['x_test'] =  data['x_test'][random_test,...]
     # data['y_test'] =  data['y_test'][random_test,...]
 
-    data["train_loader"] = DataLoader(data["x_train"], data["y_train"], batch_size)
-    data["val_loader"] = DataLoader(data["x_val"], data["y_val"], valid_batch_size)
-    data["test_loader"] = DataLoader(data["x_test"], data["y_test"], test_batch_size)
+    data["train_loader"] = DataLoader(
+        data["x_train"],
+        data["y_train"],
+        batch_size,
+        week_idx_xs=data.get("week_idx_x_train"),
+        week_idx_ys=data.get("week_idx_y_train"),
+    )
+    data["val_loader"] = DataLoader(
+        data["x_val"],
+        data["y_val"],
+        valid_batch_size,
+        week_idx_xs=data.get("week_idx_x_val"),
+        week_idx_ys=data.get("week_idx_y_val"),
+    )
+    data["test_loader"] = DataLoader(
+        data["x_test"],
+        data["y_test"],
+        test_batch_size,
+        week_idx_xs=data.get("week_idx_x_test"),
+        week_idx_ys=data.get("week_idx_y_test"),
+    )
     data["scaler"] = scaler
 
     return data

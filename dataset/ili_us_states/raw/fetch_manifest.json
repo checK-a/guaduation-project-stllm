@@ -1,0 +1,24 @@
+{
+  "ili_source": {
+    "kind": "Delphi Epidata fluview",
+    "source_data": "CDC FluView",
+    "request_url": "https://api.delphi.cmu.edu/epidata/fluview/?regions=ak%2Cal%2Car%2Caz%2Cca%2Cco%2Cct%2Cdc%2Cde%2Cfl%2Cga%2Chi%2Cia%2Cid%2Cil%2Cin%2Cks%2Cky%2Cla%2Cma%2Cmd%2Cme%2Cmi%2Cmn%2Cmo%2Cms%2Cmt%2Cnc%2Cnd%2Cne%2Cnh%2Cnj%2Cnm%2Cnv%2Cny%2Coh%2Cok%2Cor%2Cpa%2Cri%2Csc%2Csd%2Ctn%2Ctx%2Cut%2Cva%2Cvt%2Cwa%2Cwi%2Cwv%2Cwy&epiweeks=201340-202340"
+  },
+  "adjacency_source": {
+    "kind": "GitHub gist adjacency JSON",
+    "request_url": "https://api.github.com/gists/3906059",
+    "raw_url": "https://gist.githubusercontent.com/Glench/3906059/raw/62cd59e71b7cf56458afd8ac63c2dcdbead6a3bf/adjacent_us_states.json"
+  },
+  "time_range": {
+    "start_epiweek": "2013W40",
+    "end_epiweek": "2023W40"
+  },
+  "files": {
+    "ili_csv": "C:\\Users\\ASUS\\Desktop\\\u5927\u5b66\\\u5927\u56db\\\u6bd5\u8bbe\\ST_LLM_plus\\ST-LLM-Plus-main\\ST-LLM-Plus-main\\dataset\\ili_us_states\\raw\\cdc_ili_states_2013W40_2023W40.csv",
+    "adj_csv": "C:\\Users\\ASUS\\Desktop\\\u5927\u5b66\\\u5927\u56db\\\u6bd5\u8bbe\\ST_LLM_plus\\ST-LLM-Plus-main\\ST-LLM-Plus-main\\dataset\\ili_us_states\\raw\\us_state_adjacency_edges.csv"
+  },
+  "counts": {
+    "ili_rows": 26097,
+    "state_edges": 109
+  }
+}
