@@ -1,0 +1,52 @@
+state_id,state_name,state_code
+0,Alabama,al
+1,Alaska,ak
+2,Arizona,az
+3,Arkansas,ar
+4,California,ca
+5,Colorado,co
+6,Connecticut,ct
+7,Delaware,de
+8,District of Columbia,dc
+9,Florida,fl
+10,Georgia,ga
+11,Hawaii,hi
+12,Idaho,id
+13,Illinois,il
+14,Indiana,in
+15,Iowa,ia
+16,Kansas,ks
+17,Kentucky,ky
+18,Louisiana,la
+19,Maine,me
+20,Maryland,md
+21,Massachusetts,ma
+22,Michigan,mi
+23,Minnesota,mn
+24,Mississippi,ms
+25,Missouri,mo
+26,Montana,mt
+27,Nebraska,ne
+28,Nevada,nv
+29,New Hampshire,nh
+30,New Jersey,nj
+31,New Mexico,nm
+32,New York,ny
+33,North Carolina,nc
+34,North Dakota,nd
+35,Ohio,oh
+36,Oklahoma,ok
+37,Oregon,or
+38,Pennsylvania,pa
+39,Rhode Island,ri
+40,South Carolina,sc
+41,South Dakota,sd
+42,Tennessee,tn
+43,Texas,tx
+44,Utah,ut
+45,Vermont,vt
+46,Virginia,va
+47,Washington,wa
+48,West Virginia,wv
+49,Wisconsin,wi
+50,Wyoming,wy

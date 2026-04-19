@@ -88,6 +88,11 @@ def resolve_dataset_config(args):
         args.input_len = 24
         args.output_len = 4
         args.input_dim = 1
+    elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7_h14":
+        args.num_nodes = 51
+        args.input_len = 24
+        args.output_len = 14
+        args.input_dim = 1
 
     args.window = args.input_len
     args.horizon = args.output_len
