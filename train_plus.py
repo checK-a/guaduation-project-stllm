@@ -32,6 +32,12 @@ def build_parser():
     parser.add_argument("--num_nodes", type=int, default=250, help="number of nodes")
     parser.add_argument("--input_len", type=int, default=12, help="history length")
     parser.add_argument("--output_len", type=int, default=12, help="prediction length")
+    parser.add_argument(
+        "--target_day",
+        type=int,
+        default=None,
+        help="1-based target day for direct single-day prediction; e.g. 14 means predict only day 14",
+    )
     parser.add_argument("--llm_layer", type=int, default=6, help="llm layer")
     parser.add_argument("--U", type=int, default=1, help="unfrozen layer")
     parser.add_argument("--n_hidden", type=int, default=64, help="baseline hidden size")
@@ -76,23 +82,37 @@ def resolve_dataset_config(args):
 
     if dataset_name in {"bike_drop", "bike_pick"}:
         args.num_nodes = 250
+        full_output_len = args.output_len
     elif dataset_name in {"taxi_drop", "taxi_pick"}:
         args.num_nodes = 266
+        full_output_len = args.output_len
     elif dataset_name == "ili_us_states":
         args.num_nodes = 51
         args.input_len = 24
-        args.output_len = 4
+        full_output_len = 4
         args.input_dim = 1
     elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7":
         args.num_nodes = 51
         args.input_len = 24
-        args.output_len = 4
+        full_output_len = 4
         args.input_dim = 1
     elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7_h14":
         args.num_nodes = 51
         args.input_len = 24
-        args.output_len = 14
+        full_output_len = 14
         args.input_dim = 1
+    else:
+        full_output_len = args.output_len
+
+    args.full_output_len = full_output_len
+    if args.target_day is not None:
+        if not (1 <= args.target_day <= args.full_output_len):
+            raise ValueError(
+                f"--target_day must be in [1, {args.full_output_len}] for dataset {dataset_name}"
+            )
+        args.output_len = 1
+    else:
+        args.output_len = args.full_output_len
 
     args.window = args.input_len
     args.horizon = args.output_len
@@ -189,7 +209,14 @@ class Trainer:
             return output.transpose(1, 3)
         return output.transpose(1, 2).unsqueeze(1)
 
+    def _select_target_day(self, y):
+        if self.args.target_day is None:
+            return y
+        target_idx = self.args.target_day - 1
+        return y[:, target_idx : target_idx + 1, :, :]
+
     def _format_target(self, y):
+        y = self._select_target_day(y)
         return y[..., 0].transpose(1, 2).unsqueeze(1)
 
     def _step(self, x, y, temporal_idx_x=None, training=False):
@@ -256,7 +283,7 @@ def seed_it(seed):
     torch.manual_seed(seed)
 
 
-def evaluate_testset(engine, dataloader, scaler, device, output_len):
+def evaluate_testset(engine, dataloader, scaler, device, output_len, target_day=None):
     outputs = []
     realy = torch.Tensor(dataloader["y_test"]).to(device)
     realy = realy[..., 0].transpose(1, 2)
@@ -271,6 +298,12 @@ def evaluate_testset(engine, dataloader, scaler, device, output_len):
 
     yhat = torch.cat(outputs, dim=0)
     yhat = yhat[: realy.size(0), ...]
+
+    if target_day is not None:
+        target_idx = target_day - 1
+        pred = scaler.inverse_transform(yhat[:, :, 0])
+        real = realy[:, :, target_idx]
+        return util.metric(pred, real)
 
     horizon_metrics = []
     for i in range(output_len):
@@ -298,7 +331,8 @@ def main():
     best_valid_loss = float("inf")
     bestid = None
     epochs_since_best_mae = 0
-    path = os.path.join(args.save + dataset_name + "_" + args.model)
+    target_suffix = f"_d{args.target_day}" if args.target_day is not None else ""
+    path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model)
 
     his_loss = []
     val_time = []
@@ -427,7 +461,37 @@ def main():
     armse = []
     awmape = []
 
-    horizon_metrics = evaluate_testset(engine, dataloader, scaler, device, args.output_len)
+    horizon_metrics = evaluate_testset(
+        engine,
+        dataloader,
+        scaler,
+        device,
+        args.output_len,
+        target_day=args.target_day,
+    )
+
+    if args.target_day is not None:
+        mae, mape, rmse, wmape = horizon_metrics
+        print(
+            "Evaluate best model on test data for target day {:d}, Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}, Test WMAPE: {:.4f}".format(
+                args.target_day, mae, rmse, mape, wmape
+            )
+        )
+
+        test_result.append(
+            pd.Series(
+                dict(
+                    test_loss=mae,
+                    test_rmse=rmse,
+                    test_mape=mape,
+                    test_wmape=wmape,
+                )
+            )
+        )
+
+        test_csv = pd.DataFrame(test_result)
+        test_csv.round(8).to_csv(f"{path}/test.csv")
+        return
 
     for i, metrics in enumerate(horizon_metrics):
         print(
