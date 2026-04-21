@@ -96,11 +96,7 @@ class PFA(nn.Module):
                     else:
                         param.requires_grad = True
 
-        # Disable GPT-2's hard-coded causal triangle in ALL layers so spatial
-        # nodes can attend bidirectionally across the full sequence.
-        for layer_index in range(len(self.gpt2.h)):
-            attn = self.gpt2.h[layer_index].attn
-            attn.bias.fill_(True)
+        # Causal mask kept intact (GPT-2 default lower-triangular bias).
 
         # self.apply_lora_to_u_layers()
 
