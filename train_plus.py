@@ -202,6 +202,7 @@ class Trainer:
         self.output_is_normalized = args.model != "epi_st_llm_plus"
         self.is_epi_model = args.model == "epi_st_llm_plus"
         self.stage3_started = False
+        self.use_warm_start = self.is_epi_model and bool(args.warm_start_ckpt)
 
         optimizer_name = args.optimizer
         if optimizer_name is None:
@@ -215,21 +216,23 @@ class Trainer:
 
         self.clip = 5
         if self.is_epi_model:
-            if not args.warm_start_ckpt:
-                raise ValueError("--warm_start_ckpt is required when --model epi_st_llm_plus")
-            missing, unexpected = self.model.load_encoder_state(args.warm_start_ckpt)
-            self.model.freeze_encoder_for_stage2()
-            print(
-                "Loaded warm-start encoder weights. "
-                f"Missing keys after partial load: {len(missing)}, unexpected keys ignored: {len(unexpected)}"
-            )
+            if self.use_warm_start:
+                missing, unexpected = self.model.load_encoder_state(args.warm_start_ckpt)
+                self.model.freeze_encoder_for_stage2()
+                print(
+                    "Loaded warm-start encoder weights. "
+                    f"Missing keys after partial load: {len(missing)}, unexpected keys ignored: {len(unexpected)}"
+                )
+            else:
+                self.stage3_started = True
+                print("No warm-start checkpoint provided. Training epi_st_llm_plus from cold start.")
 
         print("The number of parameters: {}".format(self.param_num()))
         print("The number of trainable parameters: {}".format(self.count_trainable_params()))
         print(self.model)
 
     def maybe_enable_joint_tuning(self, epoch_index):
-        if not self.is_epi_model or self.stage3_started:
+        if not self.is_epi_model or not self.use_warm_start or self.stage3_started:
             return
         joint_tune_epoch = max(2, self.args.epochs // 2 + 1)
         if epoch_index >= joint_tune_epoch:
