@@ -68,22 +68,19 @@ class PFA(nn.Module):
         self.dropout = nn.Dropout(p=self.dropout_rate)
         self.lora_rank = 16
 
+        # Apply LoRA only to the last U layers (paper §III.D).
+        # target_modules uses layer-index prefix so only h.{F}..h.{F+U-1} are matched.
+        unfrozen_layer_indices = list(range(gpt_layers - self.U, gpt_layers))
+        lora_target_modules = [
+            f"h.{i}.attn.c_attn" for i in unfrozen_layer_indices
+        ]
         self.lora_config = LoraConfig(
             r=self.lora_rank,
-            lora_alpha=32, # 16 32
+            lora_alpha=32,
             lora_dropout=self.dropout_rate,
-            target_modules=['q_attn','c_attn'],
+            target_modules=lora_target_modules,
             bias="none"
         )
-
-        # Configure LoRA only on the last U layers
-        # self.lora_config = LoraConfig(
-        #     r=self.lora_rank,
-        #     lora_alpha=16,  # or any other hyperparameter specific to LoRA
-        #     lora_dropout=0.,  # if you want to add dropout to LoRA #0.05
-        #     target_modules=['q_attn','c_attn'],  # Apply LoRA to MLP and attention layers in the last U layers only
-        #     bias="none"  # specify whether to train bias parameters
-        # )
         self.gpt2 = get_peft_model(self.gpt2, self.lora_config)
 
         for layer_index, layer in enumerate(self.gpt2.h):
@@ -233,9 +230,12 @@ class PFA(nn.Module):
         # print(attention_mask.shape)
 
         # Use GPT-2 with attention mask
+        # Pass adjacency_matrix explicitly so custom_forward applies it only to
+        # the last U layers (paper §III.C). Front F layers get no mask (None).
         output = self.custom_forward(
             inputs_embeds=x,
-            attention_mask=attention_mask
+            attention_mask=None,
+            adjacency_matrix=adjacency_matrix
         ).last_hidden_state
         output = self.dropout(output)
 
