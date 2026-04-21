@@ -361,7 +361,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.Linear(self.compartment_dim, self.compartment_dim),
         )
         self.observation_head = nn.Sequential(
-            nn.Linear(self.compartment_dim * 2, self.compartment_dim),
+            nn.Linear(self.compartment_dim * 3, self.compartment_dim),
             nn.GELU(),
             nn.Linear(self.compartment_dim, 1),
         )
@@ -369,6 +369,11 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.Linear(self.hidden_dim, self.hidden_dim // 2),
             nn.GELU(),
             nn.Linear(self.hidden_dim // 2, self.output_len),
+        )
+        self.residual_gate_head = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim // 4),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim // 4, self.output_len),
         )
 
     @staticmethod
@@ -457,8 +462,9 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             delta_inf = torch.minimum(beta_t * inf_base, s_prev)
             delta_rec = torch.minimum(gamma_t * rec_base, i_prev + delta_inf)
 
+            base_cases = delta_inf.mean(dim=-1, keepdim=True)
             y_mech_t = Fuct.softplus(
-                self.observation_head(torch.cat([delta_inf, i_prev], dim=-1))
+                base_cases + self.observation_head(torch.cat([delta_inf, delta_rec, i_prev], dim=-1))
             )
 
             s_prev = torch.clamp_min(s_prev - delta_inf, 0.0)
@@ -492,7 +498,10 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             beta, gamma, s0, i0, r0
         )
         residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
-        prediction = torch.clamp_min(y_mech + residual, 0.0)
+        residual_gate = torch.sigmoid(
+            self.residual_gate_head(encoded).permute(0, 2, 1).unsqueeze(-1)
+        )
+        prediction = torch.clamp_min(y_mech + residual_gate * residual, 0.0)
 
         if not return_aux:
             return prediction
@@ -511,4 +520,5 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             "delta_rec": delta_rec,
             "y_mech": y_mech,
             "y_res": residual,
+            "y_res_gate": residual_gate,
         }
