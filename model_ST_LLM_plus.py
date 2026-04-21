@@ -1,11 +1,13 @@
+import os
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
 import torch
-import pickle
 import torch.nn as nn
 import torch.nn.functional as Fuct
-import numpy as np
-from transformers import GPT2Model
-from typing import Optional, Tuple, Union
 from peft import LoraConfig, get_peft_model
+from transformers import GPT2Model
+
 
 class TemporalEmbedding(nn.Module):
     def __init__(self, features):
@@ -42,7 +44,6 @@ class TemporalEmbedding(nn.Module):
 
         return temporal_emb.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_nodes, -1)
 
-from dataclasses import dataclass
 
 @dataclass
 class BaseModelOutputWithPastAndCrossAttentions:
@@ -52,34 +53,33 @@ class BaseModelOutputWithPastAndCrossAttentions:
     attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
     cross_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
 
+
 class PFA(nn.Module):
     def __init__(self, device="cuda:0", gpt_layers=6, U=1, dropout_rate=0.0):
         super(PFA, self).__init__()
-        import os
         gpt2_path = "/root/gpt2_weights" if os.path.exists("/root/gpt2_weights") else "gpt2"
-        self.gpt2 = GPT2Model.from_pretrained(gpt2_path, attn_implementation="eager",
-                                              output_attentions=True, output_hidden_states=True)  #attn_implementation="sdpa" OR "eager"
-        
+        self.gpt2 = GPT2Model.from_pretrained(
+            gpt2_path,
+            attn_implementation="eager",
+            output_attentions=True,
+            output_hidden_states=True,
+        )
+
         self.gpt2.h = self.gpt2.h[:gpt_layers]
-        # print(self.gpt2)
         self.U = U
         self.device = device
         self.dropout_rate = dropout_rate
         self.dropout = nn.Dropout(p=self.dropout_rate)
         self.lora_rank = 16
 
-        # Apply LoRA only to the last U layers (paper §III.D).
-        # target_modules uses layer-index prefix so only h.{F}..h.{F+U-1} are matched.
         unfrozen_layer_indices = list(range(gpt_layers - self.U, gpt_layers))
-        lora_target_modules = [
-            f"h.{i}.attn.c_attn" for i in unfrozen_layer_indices
-        ]
+        lora_target_modules = [f"h.{i}.attn.c_attn" for i in unfrozen_layer_indices]
         self.lora_config = LoraConfig(
             r=self.lora_rank,
             lora_alpha=32,
             lora_dropout=self.dropout_rate,
             target_modules=lora_target_modules,
-            bias="none"
+            bias="none",
         )
         self.gpt2 = get_peft_model(self.gpt2, self.lora_config)
 
@@ -96,45 +96,31 @@ class PFA(nn.Module):
                     else:
                         param.requires_grad = True
 
-        # Causal mask kept intact (GPT-2 default lower-triangular bias).
-
-        # self.apply_lora_to_u_layers()
-
-    # def apply_lora_to_u_layers(self):
-        # self.lora_config = LoraConfig(
-        #     r=self.lora_rank,
-        #     lora_alpha=16,
-        #     lora_dropout=self.dropout_rate,
-        #     target_modules=['q_attn','c_attn'],
-        #     bias="none"
-        # )
-
-        # for layer_index in range(len(self.gpt2.h) - self.U, len(self.gpt2.h)):
-        #     layer = self.gpt2.h[layer_index]
-        #     for name, param in layer.named_parameters():
-        #         if "q_attn" in name or "c_attn" in name:
-        #             layer = get_peft_model(layer, self.lora_config)
-
-    # Define a custom forward function where the attention_mask.view() step is skipped
-    def custom_forward(self,
-                    input_ids: Optional[torch.LongTensor] = None,
-                    past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-                    attention_mask: Optional[torch.FloatTensor] = None,
-                    token_type_ids: Optional[torch.LongTensor] = None,
-                    position_ids: Optional[torch.LongTensor] = None,
-                    head_mask: Optional[torch.FloatTensor] = None,
-                    inputs_embeds: Optional[torch.FloatTensor] = None,
-                    encoder_hidden_states: Optional[torch.Tensor] = None,
-                    encoder_attention_mask: Optional[torch.FloatTensor] = None,
-                    use_cache: Optional[bool] = None,
-                    output_attentions: Optional[bool] = None,
-                    output_hidden_states: Optional[bool] = None,
-                    return_dict: Optional[bool] = None,
-                    adjacency_matrix: Optional[torch.FloatTensor] = None, 
-                    ) -> Union[Tuple, dict]:
-
-        output_attentions = output_attentions if output_attentions is not None else self.gpt2.config.output_attentions
-        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.gpt2.config.output_hidden_states
+    def custom_forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        adjacency_matrix: Optional[torch.FloatTensor] = None,
+    ) -> Union[Tuple, dict]:
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.gpt2.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.gpt2.config.output_hidden_states
+        )
         use_cache = use_cache if use_cache is not None else self.gpt2.config.use_cache
         return_dict = return_dict if return_dict is not None else self.gpt2.config.use_return_dict
 
@@ -142,13 +128,11 @@ class PFA(nn.Module):
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = input_ids.size()
-            batch_size = input_ids.shape[0]
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
-            batch_size = inputs_embeds.shape[0]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
-        
+
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
         if past_key_values is None:
@@ -157,7 +141,9 @@ class PFA(nn.Module):
         else:
             past_length = past_key_values[0][0].size(-2)
         if position_ids is None:
-            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
+            position_ids = torch.arange(
+                past_length, input_shape[-1] + past_length, dtype=torch.long, device=device
+            )
             position_ids = position_ids.unsqueeze(0)
 
         if inputs_embeds is None:
@@ -170,14 +156,12 @@ class PFA(nn.Module):
         presents = () if use_cache else None
 
         total_layers = len(self.gpt2.h)
-
         for i, (block, layer_past) in enumerate(zip(self.gpt2.h, past_key_values)):
             if i >= total_layers - self.U and adjacency_matrix is not None:
                 attention_mask = adjacency_matrix.to(hidden_states.device).float()
-                # attention_mask = attention_mask.to(hidden_states.device) + adjacency_matrix.to(hidden_states.device).float()
             elif attention_mask is not None:
                 attention_mask = attention_mask.to(hidden_states.device)
-            
+
             outputs = block(
                 hidden_states,
                 layer_past=layer_past,
@@ -192,7 +176,7 @@ class PFA(nn.Module):
                 presents = presents + (outputs[1],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (outputs[2],)
-        
+
         hidden_states = self.gpt2.ln_f(hidden_states)
         hidden_states = hidden_states.view((-1,) + input_shape[1:] + (hidden_states.size(-1),))
 
@@ -207,35 +191,72 @@ class PFA(nn.Module):
             last_hidden_state=hidden_states,
             past_key_values=presents,
             hidden_states=all_hidden_states,
-            attentions=all_self_attentions
+            attentions=all_self_attentions,
         )
 
     def forward(self, x, adjacency_matrix):
-        """
-        Args:
-            x: input embeddings [batch_size, sequence_length, hidden_dim]
-            adjacency_matrix: adjacency matrix used as an attention mask
-                              [batch_size, sequence_length, sequence_length]
-        """
-        batch_size =  x.shape[0]
-        num_heads =  self.gpt2.config.n_head
+        batch_size = x.shape[0]
+        num_heads = self.gpt2.config.n_head
         adjacency_matrix = adjacency_matrix.unsqueeze(0).repeat(batch_size, 1, 1)
         adjacency_matrix = adjacency_matrix.unsqueeze(1).repeat(1, num_heads, 1, 1)
+        attention_mask = adjacency_matrix.to(self.device).float()
 
-        attention_mask = adjacency_matrix.to(self.device).float() #[64,12,250,250]
-        # print(attention_mask.shape)
-
-        # Use GPT-2 with adjacency mask applied to all layers.
-        output = self.custom_forward(
-            inputs_embeds=x,
-            attention_mask=attention_mask
-        ).last_hidden_state
+        output = self.custom_forward(inputs_embeds=x, attention_mask=attention_mask).last_hidden_state
         output = self.dropout(output)
-
         return output
 
 
-class ST_LLM(nn.Module):
+class EncoderBackboneMixin:
+    gpt_channel = 256
+    hidden_dim = 768
+
+    def _init_encoder_backbone(self):
+        self.start_conv = nn.Conv2d(
+            self.input_dim * self.input_len, self.gpt_channel, kernel_size=(1, 1)
+        )
+        self.temporal_emb = TemporalEmbedding(self.gpt_channel)
+        self.node_emb = nn.Parameter(torch.empty(self.num_nodes, self.gpt_channel))
+        nn.init.xavier_uniform_(self.node_emb)
+        self.in_layer = nn.Conv2d(self.gpt_channel * 3, self.hidden_dim, kernel_size=(1, 1))
+        self.dropout = nn.Dropout(p=self.dropout_rate)
+        self.gpt = PFA(
+            device=self.device,
+            gpt_layers=self.llm_layer,
+            U=self.U,
+            dropout_rate=self.dropout_rate,
+        )
+
+    def encode(self, history_data, temporal_idx_x=None):
+        data = history_data.permute(0, 3, 2, 1)
+        batch_size, _, num_nodes, _ = data.shape
+
+        if temporal_idx_x is None:
+            temporal_idx_x = torch.zeros(
+                (batch_size, self.input_len, 1), dtype=torch.long, device=history_data.device
+            )
+
+        time_emb = self.temporal_emb(temporal_idx_x, self.num_nodes)
+        node_emb = (
+            self.node_emb.unsqueeze(0)
+            .expand(batch_size, -1, -1)
+            .transpose(1, 2)
+            .unsqueeze(-1)
+        )
+
+        input_data = data.permute(0, 3, 2, 1)
+        input_data = input_data.transpose(1, 2).contiguous()
+        input_data = input_data.view(batch_size, num_nodes, -1).transpose(1, 2).unsqueeze(-1)
+        input_data = self.start_conv(input_data)
+
+        data_st = torch.cat([input_data, time_emb, node_emb], dim=1)
+        data_st = self.in_layer(data_st)
+        data_st = Fuct.leaky_relu(data_st)
+        data_st = data_st.permute(0, 2, 1, 3).squeeze(-1)
+
+        return self.gpt(data_st, self.adj_mx)
+
+
+class ST_LLM(nn.Module, EncoderBackboneMixin):
     def __init__(
         self,
         device,
@@ -245,12 +266,11 @@ class ST_LLM(nn.Module):
         input_len=12,
         output_len=12,
         llm_layer=6,
-        U=1
+        U=1,
     ):
         super().__init__()
-
         self.device = device
-        self.adj_mx = torch.tensor(adj_mx, dtype=torch.float32).to(self.device)        
+        self.adj_mx = torch.tensor(adj_mx, dtype=torch.float32).to(self.device)
         self.input_dim = input_dim
         self.num_nodes = num_nodes
         self.input_len = input_len
@@ -259,76 +279,221 @@ class ST_LLM(nn.Module):
         self.U = U
         self.dropout_rate = 0.1
 
-        gpt_channel = 256
-        to_gpt_channel = 768
-            
-        self.start_conv = nn.Conv2d(
-            self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1)
-        )
+        self._init_encoder_backbone()
+        self.regression_layer = nn.Conv2d(self.hidden_dim, self.output_len, kernel_size=(1, 1))
 
-        self.temporal_emb = TemporalEmbedding(gpt_channel)
-        self.node_emb = nn.Parameter(torch.empty(self.num_nodes, gpt_channel))
-        nn.init.xavier_uniform_(self.node_emb)
-
-        self.in_layer = nn.Conv2d(gpt_channel*3, to_gpt_channel, kernel_size=(1, 1))
-        self.dropout = nn.Dropout(p=self.dropout_rate)         
-
-        # regression
-        self.regression_layer = nn.Conv2d(to_gpt_channel, self.output_len, kernel_size=(1, 1)) 
-
-        # GPT2
-        self.gpt = PFA(device=self.device, gpt_layers=self.llm_layer, U=self.U, dropout_rate=self.dropout_rate)
-                 
     def param_num(self):
-        return sum([param.nelement() for param in self.parameters()])
-    
+        return sum(param.nelement() for param in self.parameters())
+
     def count_trainable_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, history_data, temporal_idx_x=None):
+        encoded = self.encode(history_data, temporal_idx_x)
+        outputs = encoded.permute(0, 2, 1).unsqueeze(-1)
+        outputs = self.regression_layer(outputs)
+        return outputs
 
-        data = history_data.permute(0, 3, 2, 1)
-        B, T, S, F = data.shape
-        # print(data.shape) #[64, 12, 250, 3]
 
-        if temporal_idx_x is None:
-            temporal_idx_x = torch.zeros(
-                (B, self.input_len, 1), dtype=torch.long, device=history_data.device
+class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
+    def __init__(
+        self,
+        device,
+        adj_mx,
+        input_dim=1,
+        num_nodes=51,
+        input_len=24,
+        output_len=10,
+        llm_layer=6,
+        U=1,
+        compartment_dim=16,
+    ):
+        super().__init__()
+        self.device = device
+        self.input_dim = input_dim
+        self.num_nodes = num_nodes
+        self.input_len = input_len
+        self.output_len = output_len
+        self.llm_layer = llm_layer
+        self.U = U
+        self.dropout_rate = 0.1
+        self.compartment_dim = compartment_dim
+        self.global_context_dim = 256
+
+        adj_tensor = torch.tensor(adj_mx, dtype=torch.float32)
+        self.adj_mx = adj_tensor.to(self.device)
+        self.register_buffer("adj_mx_norm", self._normalize_adjacency(adj_tensor), persistent=False)
+
+        self._init_encoder_backbone()
+
+        self.global_trend = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.global_context_dim),
+            nn.GELU(),
+            nn.Linear(self.global_context_dim, self.global_context_dim),
+        )
+        joint_dim = self.hidden_dim + self.global_context_dim
+        self.beta_head = nn.Sequential(
+            nn.Linear(joint_dim, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, self.output_len),
+        )
+        self.gamma_head = nn.Sequential(
+            nn.Linear(joint_dim, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, self.output_len),
+        )
+
+        self.s0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
+        self.i0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
+        self.r0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
+
+        infection_input_dim = self.compartment_dim * 2 + 1
+        recovery_input_dim = self.compartment_dim + 1
+        self.infection_mlp = nn.Sequential(
+            nn.Linear(infection_input_dim, self.compartment_dim),
+            nn.GELU(),
+            nn.Linear(self.compartment_dim, self.compartment_dim),
+        )
+        self.recovery_mlp = nn.Sequential(
+            nn.Linear(recovery_input_dim, self.compartment_dim),
+            nn.GELU(),
+            nn.Linear(self.compartment_dim, self.compartment_dim),
+        )
+        self.observation_head = nn.Sequential(
+            nn.Linear(self.compartment_dim * 3, self.compartment_dim),
+            nn.GELU(),
+            nn.Linear(self.compartment_dim, 1),
+        )
+        self.residual_head = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim // 2, self.output_len),
+        )
+
+    @staticmethod
+    def _normalize_adjacency(adjacency_matrix):
+        adjacency_matrix = adjacency_matrix.clone()
+        degree = adjacency_matrix.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        return adjacency_matrix / degree
+
+    def load_encoder_state(self, checkpoint_path):
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Warm-start checkpoint not found: {checkpoint_path}")
+
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        own_state = self.state_dict()
+        matched_state = {}
+        for key, value in state_dict.items():
+            if key in own_state and own_state[key].shape == value.shape:
+                matched_state[key] = value
+
+        missing, unexpected = self.load_state_dict(matched_state, strict=False)
+        if not matched_state:
+            raise RuntimeError(
+                "No encoder weights were loaded from the warm-start checkpoint. "
+                "Expected a checkpoint saved from st_llm_plus."
+            )
+        return missing, unexpected
+
+    def freeze_encoder_for_stage2(self):
+        encoder_modules = [
+            self.start_conv,
+            self.temporal_emb,
+            self.in_layer,
+            self.gpt,
+        ]
+        self.node_emb.requires_grad = False
+        for module in encoder_modules:
+            for param in module.parameters():
+                param.requires_grad = False
+
+    def enable_joint_tuning_stage3(self):
+        self.freeze_encoder_for_stage2()
+        for name, param in self.gpt.named_parameters():
+            if "lora_" in name:
+                param.requires_grad = True
+        for param in self.gpt.gpt2.h[-1].parameters():
+            param.requires_grad = True
+
+    def _compute_global_context(self, encoded):
+        pooled = encoded.mean(dim=1)
+        global_context = self.global_trend(pooled)
+        return global_context.unsqueeze(1).expand(-1, self.num_nodes, -1)
+
+    def _init_compartments(self, encoded):
+        s0 = Fuct.softplus(self.s0_head(encoded))
+        i0 = Fuct.softplus(self.i0_head(encoded))
+        r0 = Fuct.softplus(self.r0_head(encoded))
+        return s0, i0, r0
+
+    def _predict_parameters(self, joint_context):
+        beta = Fuct.softplus(self.beta_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        gamma = Fuct.softplus(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        return beta, gamma
+
+    def _rollout(self, beta, gamma, s0, i0, r0):
+        s_prev, i_prev, r_prev = s0, i0, r0
+        s_states = []
+        i_states = []
+        r_states = []
+        mech_outputs = []
+
+        for horizon_index in range(self.output_len):
+            beta_t = beta[:, horizon_index]
+            gamma_t = gamma[:, horizon_index]
+            lambda_t = torch.einsum("nm,bmd->bnd", self.adj_mx_norm, i_prev)
+
+            delta_inf = Fuct.softplus(
+                self.infection_mlp(torch.cat([s_prev, lambda_t, beta_t], dim=-1))
+            )
+            delta_rec = Fuct.softplus(
+                self.recovery_mlp(torch.cat([i_prev, gamma_t], dim=-1))
             )
 
-        time_emb = self.temporal_emb(temporal_idx_x, self.num_nodes)
+            s_prev = torch.clamp_min(s_prev - delta_inf, 0.0)
+            i_prev = torch.clamp_min(i_prev + delta_inf - delta_rec, 0.0)
+            r_prev = torch.clamp_min(r_prev + delta_rec, 0.0)
 
-        node_emb = []
-        node_emb.append(
-            self.node_emb.unsqueeze(0)
-            .expand(B, -1, -1)
-            .transpose(1, 2)
-            .unsqueeze(-1)
+            s_states.append(s_prev)
+            i_states.append(i_prev)
+            r_states.append(r_prev)
+            y_mech_t = Fuct.softplus(
+                self.observation_head(torch.cat([s_prev, i_prev, r_prev], dim=-1))
+            )
+            mech_outputs.append(y_mech_t)
+
+        return (
+            torch.stack(mech_outputs, dim=1),
+            torch.stack(s_states, dim=1),
+            torch.stack(i_states, dim=1),
+            torch.stack(r_states, dim=1),
         )
-        
-        input_data = data.permute(0,3,2,1) #[32, 2, 207, 12]
-        input_data = input_data.transpose(1, 2).contiguous() #[32, 207, 2, 12]
-        input_data = (input_data.view(B, S, -1).transpose(1, 2).unsqueeze(-1))
-        # print(input_data.shape) #[64, 36, 250, 1]
-        input_data = self.start_conv(input_data)
-        # print(input_data.shape)#[64, 36, 250, 1]
 
-        data_st = torch.cat([input_data] + [time_emb] + node_emb, dim=1)
-        # print(f"After cat: data_st shape: {data_st.shape}, type: {type(data_st)}")
+    def forward(self, history_data, temporal_idx_x=None, return_aux=False):
+        encoded = self.encode(history_data, temporal_idx_x)
+        global_context = self._compute_global_context(encoded)
+        joint_context = torch.cat([encoded, global_context], dim=-1)
 
-        data_st = self.in_layer(data_st)
-        # print(f"After in_layer: data_st shape: {data_st.shape}, type: {type(data_st)}")
+        beta, gamma = self._predict_parameters(joint_context)
+        s0, i0, r0 = self._init_compartments(encoded)
+        y_mech, s_states, i_states, r_states = self._rollout(beta, gamma, s0, i0, r0)
+        residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
+        prediction = Fuct.softplus(y_mech + residual)
 
-        data_st = Fuct.leaky_relu(data_st)
-        data_st = data_st.permute(0, 2, 1, 3).squeeze(-1) 
-        
-        outputs = self.gpt(data_st, self.adj_mx)
-            
-        outputs = outputs.permute(0, 2, 1).unsqueeze(-1)
-        # print(outputs.shape) #[64, 768, 250, 1]       
+        if not return_aux:
+            return prediction
 
-        # regression
-        outputs = self.regression_layer(outputs)  
-        # print(outputs.shape) #[64, 12, 250, 1]
-
-        return outputs
+        return {
+            "prediction": prediction,
+            "beta": beta,
+            "gamma": gamma,
+            "s0": s0,
+            "i0": i0,
+            "r0": r0,
+            "S": s_states,
+            "I": i_states,
+            "R": r_states,
+            "y_mech": y_mech,
+            "y_res": residual,
+        }

@@ -1,7 +1,9 @@
 import argparse
+import json
 import os
 import random
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -22,7 +24,7 @@ def build_parser():
         "--model",
         type=str,
         default="st_llm_plus",
-        choices=["st_llm_plus", "AR", "VAR", "cola_gnn", "STGCN"],
+        choices=["st_llm_plus", "epi_st_llm_plus", "AR", "VAR", "cola_gnn", "STGCN"],
         help="model name",
     )
     parser.add_argument("--batch_size", type=int, default=64, help="batch size")
@@ -51,7 +53,7 @@ def build_parser():
         type=str,
         default=None,
         choices=["ranger", "adam", None],
-        help="optimizer; defaults to ranger for st_llm_plus and adam for baselines",
+        help="optimizer; defaults to ranger for ST-LLM families and adam for baselines",
     )
     parser.add_argument("--print_every", type=int, default=50, help="")
     parser.add_argument("--wdecay", type=float, default=0.0001, help="weight decay rate")
@@ -73,34 +75,43 @@ def build_parser():
         default=200,
         help="minimum number of epochs to train before early stopping can trigger",
     )
+    parser.add_argument(
+        "--warm_start_ckpt",
+        type=str,
+        default=None,
+        help="checkpoint path for loading a trained st_llm_plus encoder into epi_st_llm_plus",
+    )
+    parser.add_argument("--compartment_dim", type=int, default=16, help="latent compartment size")
+    parser.add_argument("--lambda_wmape", type=float, default=0.1, help="weight for WMAPE term")
+    parser.add_argument("--lambda_mass", type=float, default=0.01, help="weight for mass regularizer")
+    parser.add_argument("--lambda_param", type=float, default=0.01, help="weight for parameter smoothness")
     return parser
+
+
+def _load_meta_dataset_config(dataset_name):
+    meta_path = Path("dataset") / dataset_name / dataset_name / "meta.json"
+    if not meta_path.exists():
+        return None
+    with open(meta_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def resolve_dataset_config(args):
     dataset_name = args.data
     args.data = f"dataset//{dataset_name}//{dataset_name}"
 
-    if dataset_name in {"bike_drop", "bike_pick"}:
+    meta = _load_meta_dataset_config(dataset_name)
+    if meta is not None:
+        args.num_nodes = int(meta.get("num_nodes", args.num_nodes))
+        args.input_len = int(meta.get("input_len", args.input_len))
+        args.input_dim = len(meta.get("feature_names", [])) or args.input_dim
+        full_output_len = int(meta.get("output_len", args.output_len))
+    elif dataset_name in {"bike_drop", "bike_pick"}:
         args.num_nodes = 250
         full_output_len = args.output_len
     elif dataset_name in {"taxi_drop", "taxi_pick"}:
         args.num_nodes = 266
         full_output_len = args.output_len
-    elif dataset_name == "ili_us_states":
-        args.num_nodes = 51
-        args.input_len = 24
-        full_output_len = 4
-        args.input_dim = 1
-    elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7":
-        args.num_nodes = 51
-        args.input_len = 24
-        full_output_len = 4
-        args.input_dim = 1
-    elif dataset_name == "us_states_covid_jhu_20200301_20230309_ma7_h14":
-        args.num_nodes = 51
-        args.input_len = 24
-        full_output_len = 14
-        args.input_dim = 1
     else:
         full_output_len = args.output_len
 
@@ -110,7 +121,7 @@ def resolve_dataset_config(args):
             raise ValueError(
                 f"--target_day must be in [1, {args.full_output_len}] for dataset {dataset_name}"
             )
-        args.output_len = 1
+        args.output_len = args.full_output_len if args.model == "epi_st_llm_plus" else 1
     else:
         args.output_len = args.full_output_len
 
@@ -124,19 +135,32 @@ def load_adj_mx(dataset_path):
 
 
 def build_model(args, device, adj_mx):
-    if args.model == "st_llm_plus":
-        from model_ST_LLM_plus import ST_LLM
+    if args.model in {"st_llm_plus", "epi_st_llm_plus"}:
+        from model_ST_LLM_plus import EpiSTLLMPlus, ST_LLM
 
-        model = ST_LLM(
-            device,
-            adj_mx,
-            args.input_dim,
-            args.num_nodes,
-            args.input_len,
-            args.output_len,
-            args.llm_layer,
-            args.U,
-        )
+        if args.model == "st_llm_plus":
+            model = ST_LLM(
+                device,
+                adj_mx,
+                args.input_dim,
+                args.num_nodes,
+                args.input_len,
+                args.output_len,
+                args.llm_layer,
+                args.U,
+            )
+        else:
+            model = EpiSTLLMPlus(
+                device,
+                adj_mx,
+                args.input_dim,
+                args.num_nodes,
+                args.input_len,
+                args.output_len,
+                args.llm_layer,
+                args.U,
+                args.compartment_dim,
+            )
         return model.to(device)
 
     from earth_baselines import AR, STGCN, VAR, cola_gnn
@@ -171,23 +195,50 @@ def build_model(args, device, adj_mx):
 class Trainer:
     def __init__(self, args, scaler, adj_mx, device):
         self.args = args
+        self.scaler = scaler
         self.model = build_model(args, device, adj_mx)
         self.model.to(device)
+        self.device = device
+        self.output_is_normalized = args.model != "epi_st_llm_plus"
+        self.is_epi_model = args.model == "epi_st_llm_plus"
+        self.stage3_started = False
+
         optimizer_name = args.optimizer
         if optimizer_name is None:
-            optimizer_name = "ranger" if args.model == "st_llm_plus" else "adam"
+            optimizer_name = "ranger" if args.model in {"st_llm_plus", "epi_st_llm_plus"} else "adam"
         if optimizer_name == "ranger":
             self.optimizer = Ranger(self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay)
         else:
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay
             )
-        self.loss = util.MAE_torch
-        self.scaler = scaler
+
         self.clip = 5
+        if self.is_epi_model:
+            if not args.warm_start_ckpt:
+                raise ValueError("--warm_start_ckpt is required when --model epi_st_llm_plus")
+            missing, unexpected = self.model.load_encoder_state(args.warm_start_ckpt)
+            self.model.freeze_encoder_for_stage2()
+            print(
+                "Loaded warm-start encoder weights. "
+                f"Missing keys after partial load: {len(missing)}, unexpected keys ignored: {len(unexpected)}"
+            )
+
         print("The number of parameters: {}".format(self.param_num()))
         print("The number of trainable parameters: {}".format(self.count_trainable_params()))
         print(self.model)
+
+    def maybe_enable_joint_tuning(self, epoch_index):
+        if not self.is_epi_model or self.stage3_started:
+            return
+        joint_tune_epoch = max(2, self.args.epochs // 2 + 1)
+        if epoch_index >= joint_tune_epoch:
+            self.model.enable_joint_tuning_stage3()
+            self.stage3_started = True
+            print(
+                "Switching epi_st_llm_plus to stage 3 joint tuning at epoch {}. "
+                "LoRA and the last PFGA layer are now trainable.".format(epoch_index)
+            )
 
     def param_num(self):
         return sum(param.nelement() for param in self.model.parameters())
@@ -196,7 +247,7 @@ class Trainer:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
     def _prepare_input(self, x, temporal_idx_x=None):
-        if self.args.model == "st_llm_plus":
+        if self.args.model in {"st_llm_plus", "epi_st_llm_plus"}:
             model_x = x.transpose(1, 3)
             model_temporal = temporal_idx_x
         else:
@@ -205,7 +256,7 @@ class Trainer:
         return model_x, model_temporal
 
     def _format_output(self, output):
-        if self.args.model == "st_llm_plus":
+        if self.args.model in {"st_llm_plus", "epi_st_llm_plus"}:
             return output.transpose(1, 3)
         return output.transpose(1, 2).unsqueeze(1)
 
@@ -215,9 +266,43 @@ class Trainer:
         target_idx = self.args.target_day - 1
         return y[:, target_idx : target_idx + 1, :, :]
 
+    def _select_prediction_day(self, prediction):
+        if self.args.target_day is None or prediction.size(-1) == 1:
+            return prediction
+        target_idx = self.args.target_day - 1
+        return prediction[..., target_idx : target_idx + 1]
+
     def _format_target(self, y):
         y = self._select_target_day(y)
         return y[..., 0].transpose(1, 2).unsqueeze(1)
+
+    def _compute_pred_loss(self, predict, real):
+        mae = util.MAE_torch(predict, real, 0.0)
+        wmape = util.WMAPE_torch(predict, real, 0.0)
+        return mae + self.args.lambda_wmape * wmape
+
+    def _compute_epi_regularizers(self, model_output):
+        beta = model_output["beta"]
+        gamma = model_output["gamma"]
+        s0 = model_output["s0"]
+        i0 = model_output["i0"]
+        r0 = model_output["r0"]
+        s_states = model_output["S"]
+        i_states = model_output["I"]
+        r_states = model_output["R"]
+
+        initial_mass = (s0 + i0 + r0).mean(dim=-1)
+        rollout_mass = (s_states + i_states + r_states).mean(dim=-1)
+        mass_loss = torch.abs(rollout_mass - initial_mass.unsqueeze(1)).mean()
+
+        if beta.size(1) > 1:
+            beta_smooth = torch.abs(beta[:, 1:] - beta[:, :-1]).mean()
+            gamma_smooth = torch.abs(gamma[:, 1:] - gamma[:, :-1]).mean()
+            param_loss = beta_smooth + gamma_smooth
+        else:
+            param_loss = torch.zeros((), device=beta.device)
+
+        return mass_loss, param_loss
 
     def _step(self, x, y, temporal_idx_x=None, training=False):
         model_x, model_temporal = self._prepare_input(x, temporal_idx_x)
@@ -227,19 +312,24 @@ class Trainer:
         else:
             self.model.eval()
 
-        output = (
-            self.model(model_x, model_temporal)
-            if self.args.model == "st_llm_plus"
-            else self.model(model_x)[0]
-        )
-        if self.args.model == "st_llm_plus":
-            output = self._format_output(output)
+        if self.is_epi_model:
+            model_output = self.model(model_x, model_temporal, return_aux=True)
+            output = self._format_output(model_output["prediction"])
         else:
+            model_output = None
+            output = self.model(model_x, model_temporal) if self.args.model == "st_llm_plus" else self.model(model_x)[0]
             output = self._format_output(output)
 
+        output_for_loss = self._select_prediction_day(output)
         real = self._format_target(y)
-        predict = self.scaler.inverse_transform(output)
-        loss = self.loss(predict, real, 0.0)
+        predict = output_for_loss if not self.output_is_normalized else self.scaler.inverse_transform(output_for_loss)
+
+        loss = self._compute_pred_loss(predict, real)
+        mass_loss = torch.zeros((), device=predict.device)
+        param_loss = torch.zeros((), device=predict.device)
+        if self.is_epi_model:
+            mass_loss, param_loss = self._compute_epi_regularizers(model_output)
+            loss = loss + self.args.lambda_mass * mass_loss + self.args.lambda_param * param_loss
 
         if training:
             loss.backward()
@@ -250,7 +340,14 @@ class Trainer:
         mape = util.MAPE_torch(predict, real, 0.0).item()
         rmse = util.RMSE_torch(predict, real, 0.0).item()
         wmape = util.WMAPE_torch(predict, real, 0.0).item()
-        return loss.item(), mape, rmse, wmape
+        return {
+            "loss": loss.item(),
+            "mape": mape,
+            "rmse": rmse,
+            "wmape": wmape,
+            "mass_loss": mass_loss.item(),
+            "param_loss": param_loss.item(),
+        }
 
     def train(self, x, y, temporal_idx_x=None):
         return self._step(x, y, temporal_idx_x=temporal_idx_x, training=True)
@@ -263,11 +360,14 @@ class Trainer:
         self.model.eval()
         with torch.no_grad():
             model_x, model_temporal = self._prepare_input(x, temporal_idx_x)
-            output = (
-                self.model(model_x, model_temporal)
-                if self.args.model == "st_llm_plus"
-                else self.model(model_x)[0]
-            )
+            if self.is_epi_model:
+                output = self.model(model_x, model_temporal)
+            else:
+                output = (
+                    self.model(model_x, model_temporal)
+                    if self.args.model == "st_llm_plus"
+                    else self.model(model_x)[0]
+                )
             return self._format_output(output)
 
 
@@ -301,13 +401,13 @@ def evaluate_testset(engine, dataloader, scaler, device, output_len, target_day=
 
     if target_day is not None:
         target_idx = target_day - 1
-        pred = scaler.inverse_transform(yhat[:, :, 0])
+        pred = yhat[:, :, target_idx] if engine.is_epi_model else scaler.inverse_transform(yhat[:, :, 0])
         real = realy[:, :, target_idx]
         return util.metric(pred, real)
 
     horizon_metrics = []
     for i in range(output_len):
-        pred = scaler.inverse_transform(yhat[:, :, i])
+        pred = yhat[:, :, i] if engine.is_epi_model else scaler.inverse_transform(yhat[:, :, i])
         real = realy[:, :, i]
         horizon_metrics.append(util.metric(pred, real))
 
@@ -334,7 +434,6 @@ def main():
     target_suffix = f"_d{args.target_day}" if args.target_day is not None else ""
     path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model)
 
-    his_loss = []
     val_time = []
     train_time = []
     result = []
@@ -348,10 +447,14 @@ def main():
 
     print("start training...", flush=True)
     for i in range(1, args.epochs + 1):
+        engine.maybe_enable_joint_tuning(i)
+
         train_loss = []
         train_mape = []
         train_rmse = []
         train_wmape = []
+        train_mass = []
+        train_param = []
 
         t1 = time.time()
         for _, (x, y, temporal_idx_x, temporal_idx_y) in enumerate(dataloader["train_loader"].get_iterator()):
@@ -361,10 +464,12 @@ def main():
                 torch.LongTensor(temporal_idx_x).to(device) if temporal_idx_x is not None else None
             )
             metrics = engine.train(trainx, trainy, train_temporal_idx_x)
-            train_loss.append(metrics[0])
-            train_mape.append(metrics[1])
-            train_rmse.append(metrics[2])
-            train_wmape.append(metrics[3])
+            train_loss.append(metrics["loss"])
+            train_mape.append(metrics["mape"])
+            train_rmse.append(metrics["rmse"])
+            train_wmape.append(metrics["wmape"])
+            train_mass.append(metrics["mass_loss"])
+            train_param.append(metrics["param_loss"])
 
         t2 = time.time()
         print("Epoch: {:03d}, Training Time: {:.4f} secs".format(i, (t2 - t1)))
@@ -374,6 +479,8 @@ def main():
         valid_mape = []
         valid_wmape = []
         valid_rmse = []
+        valid_mass = []
+        valid_param = []
 
         s1 = time.time()
         for _, (x, y, temporal_idx_x, temporal_idx_y) in enumerate(dataloader["val_loader"].get_iterator()):
@@ -383,10 +490,12 @@ def main():
                 torch.LongTensor(temporal_idx_x).to(device) if temporal_idx_x is not None else None
             )
             metrics = engine.eval(valx, valy, val_temporal_idx_x)
-            valid_loss.append(metrics[0])
-            valid_mape.append(metrics[1])
-            valid_rmse.append(metrics[2])
-            valid_wmape.append(metrics[3])
+            valid_loss.append(metrics["loss"])
+            valid_mape.append(metrics["mape"])
+            valid_rmse.append(metrics["rmse"])
+            valid_wmape.append(metrics["wmape"])
+            valid_mass.append(metrics["mass_loss"])
+            valid_param.append(metrics["param_loss"])
 
         s2 = time.time()
         print("Epoch: {:03d}, Inference Time: {:.4f} secs".format(i, (s2 - s1)))
@@ -396,38 +505,44 @@ def main():
         mtrain_mape = np.mean(train_mape)
         mtrain_wmape = np.mean(train_wmape)
         mtrain_rmse = np.mean(train_rmse)
+        mtrain_mass = np.mean(train_mass)
+        mtrain_param = np.mean(train_param)
 
         mvalid_loss = np.mean(valid_loss)
         mvalid_mape = np.mean(valid_mape)
         mvalid_wmape = np.mean(valid_wmape)
         mvalid_rmse = np.mean(valid_rmse)
+        mvalid_mass = np.mean(valid_mass)
+        mvalid_param = np.mean(valid_param)
 
-        his_loss.append(mvalid_loss)
         print("-----------------------")
-
         train_m = pd.Series(
             dict(
                 train_loss=mtrain_loss,
                 train_rmse=mtrain_rmse,
                 train_mape=mtrain_mape,
                 train_wmape=mtrain_wmape,
+                train_mass=mtrain_mass,
+                train_param=mtrain_param,
                 valid_loss=mvalid_loss,
                 valid_rmse=mvalid_rmse,
                 valid_mape=mvalid_mape,
                 valid_wmape=mvalid_wmape,
+                valid_mass=mvalid_mass,
+                valid_param=mvalid_param,
             )
         )
         result.append(train_m)
 
         print(
-            "Epoch: {:03d}, Train Loss: {:.4f}, Train RMSE: {:.4f}, Train MAPE: {:.4f}, Train WMAPE: {:.4f}".format(
-                i, mtrain_loss, mtrain_rmse, mtrain_mape, mtrain_wmape
+            "Epoch: {:03d}, Train Loss: {:.4f}, Train RMSE: {:.4f}, Train MAPE: {:.4f}, Train WMAPE: {:.4f}, Train Mass: {:.4f}, Train Param: {:.4f}".format(
+                i, mtrain_loss, mtrain_rmse, mtrain_mape, mtrain_wmape, mtrain_mass, mtrain_param
             ),
             flush=True,
         )
         print(
-            "Epoch: {:03d}, Valid Loss: {:.4f}, Valid RMSE: {:.4f}, Valid MAPE: {:.4f}, Valid WMAPE: {:.4f}".format(
-                i, mvalid_loss, mvalid_rmse, mvalid_mape, mvalid_wmape
+            "Epoch: {:03d}, Valid Loss: {:.4f}, Valid RMSE: {:.4f}, Valid MAPE: {:.4f}, Valid WMAPE: {:.4f}, Valid Mass: {:.4f}, Valid Param: {:.4f}".format(
+                i, mvalid_loss, mvalid_rmse, mvalid_mape, mvalid_wmape, mvalid_mass, mvalid_param
             ),
             flush=True,
         )
