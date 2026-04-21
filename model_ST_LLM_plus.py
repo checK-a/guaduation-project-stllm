@@ -346,9 +346,10 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         self.s0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
         self.i0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
         self.r0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
+        self.i0_recent_scale = nn.Parameter(torch.tensor(1.0))
 
-        infection_input_dim = self.compartment_dim * 2 + 1
-        recovery_input_dim = self.compartment_dim + 1
+        infection_input_dim = self.compartment_dim * 2
+        recovery_input_dim = self.compartment_dim
         self.infection_mlp = nn.Sequential(
             nn.Linear(infection_input_dim, self.compartment_dim),
             nn.GELU(),
@@ -360,7 +361,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.Linear(self.compartment_dim, self.compartment_dim),
         )
         self.observation_head = nn.Sequential(
-            nn.Linear(self.compartment_dim * 3, self.compartment_dim),
+            nn.Linear(self.compartment_dim * 2, self.compartment_dim),
             nn.GELU(),
             nn.Linear(self.compartment_dim, 1),
         )
@@ -421,15 +422,20 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         global_context = self.global_trend(pooled)
         return global_context.unsqueeze(1).expand(-1, self.num_nodes, -1)
 
-    def _init_compartments(self, encoded):
+    def _init_compartments(self, encoded, history_data):
+        history_sequence = history_data.permute(0, 3, 2, 1)[..., 0]
+        recent_window = min(3, history_sequence.size(1))
+        recent_cases = history_sequence[:, -recent_window:, :].mean(dim=1, keepdim=False).unsqueeze(-1)
+        recent_anchor = recent_cases.expand(-1, -1, self.compartment_dim)
+
         s0 = Fuct.softplus(self.s0_head(encoded))
-        i0 = Fuct.softplus(self.i0_head(encoded))
+        i0 = Fuct.softplus(self.i0_head(encoded) + self.i0_recent_scale * recent_anchor)
         r0 = Fuct.softplus(self.r0_head(encoded))
         return s0, i0, r0
 
     def _predict_parameters(self, joint_context):
-        beta = Fuct.softplus(self.beta_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
-        gamma = Fuct.softplus(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        beta = torch.sigmoid(self.beta_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        gamma = torch.sigmoid(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
         return beta, gamma
 
     def _rollout(self, beta, gamma, s0, i0, r0):
@@ -438,17 +444,21 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         i_states = []
         r_states = []
         mech_outputs = []
+        inf_flows = []
+        rec_flows = []
 
         for horizon_index in range(self.output_len):
             beta_t = beta[:, horizon_index]
             gamma_t = gamma[:, horizon_index]
             lambda_t = torch.einsum("nm,bmd->bnd", self.adj_mx_norm, i_prev)
 
-            delta_inf = Fuct.softplus(
-                self.infection_mlp(torch.cat([s_prev, lambda_t, beta_t], dim=-1))
-            )
-            delta_rec = Fuct.softplus(
-                self.recovery_mlp(torch.cat([i_prev, gamma_t], dim=-1))
+            inf_base = Fuct.softplus(self.infection_mlp(torch.cat([s_prev, lambda_t], dim=-1)))
+            rec_base = Fuct.softplus(self.recovery_mlp(i_prev))
+            delta_inf = torch.minimum(beta_t * inf_base, s_prev)
+            delta_rec = torch.minimum(gamma_t * rec_base, i_prev + delta_inf)
+
+            y_mech_t = Fuct.softplus(
+                self.observation_head(torch.cat([delta_inf, i_prev], dim=-1))
             )
 
             s_prev = torch.clamp_min(s_prev - delta_inf, 0.0)
@@ -458,16 +468,17 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             s_states.append(s_prev)
             i_states.append(i_prev)
             r_states.append(r_prev)
-            y_mech_t = Fuct.softplus(
-                self.observation_head(torch.cat([s_prev, i_prev, r_prev], dim=-1))
-            )
             mech_outputs.append(y_mech_t)
+            inf_flows.append(delta_inf)
+            rec_flows.append(delta_rec)
 
         return (
             torch.stack(mech_outputs, dim=1),
             torch.stack(s_states, dim=1),
             torch.stack(i_states, dim=1),
             torch.stack(r_states, dim=1),
+            torch.stack(inf_flows, dim=1),
+            torch.stack(rec_flows, dim=1),
         )
 
     def forward(self, history_data, temporal_idx_x=None, return_aux=False):
@@ -476,10 +487,12 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         joint_context = torch.cat([encoded, global_context], dim=-1)
 
         beta, gamma = self._predict_parameters(joint_context)
-        s0, i0, r0 = self._init_compartments(encoded)
-        y_mech, s_states, i_states, r_states = self._rollout(beta, gamma, s0, i0, r0)
+        s0, i0, r0 = self._init_compartments(encoded, history_data)
+        y_mech, s_states, i_states, r_states, delta_inf, delta_rec = self._rollout(
+            beta, gamma, s0, i0, r0
+        )
         residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
-        prediction = Fuct.softplus(y_mech + residual)
+        prediction = torch.clamp_min(y_mech + residual, 0.0)
 
         if not return_aux:
             return prediction
@@ -494,6 +507,8 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             "S": s_states,
             "I": i_states,
             "R": r_states,
+            "delta_inf": delta_inf,
+            "delta_rec": delta_rec,
             "y_mech": y_mech,
             "y_res": residual,
         }

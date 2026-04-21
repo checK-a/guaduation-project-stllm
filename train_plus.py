@@ -280,6 +280,22 @@ class Trainer:
         return y[..., 0].transpose(1, 2).unsqueeze(1)
 
     def _compute_pred_loss(self, predict, real):
+        if self.is_epi_model and self.args.target_day is None and predict.size(-1) > 1:
+            horizon_weights = torch.linspace(
+                2.0,
+                1.0,
+                steps=predict.size(-1),
+                device=predict.device,
+                dtype=predict.dtype,
+            ).view(1, 1, 1, -1)
+            horizon_weights = horizon_weights / horizon_weights.mean()
+            abs_error = torch.abs(real - predict)
+            mae = (abs_error * horizon_weights).mean()
+            wmape = torch.sum(abs_error * horizon_weights) / torch.sum(
+                torch.abs(real) * horizon_weights
+            ).clamp_min(1e-6)
+            return mae + self.args.lambda_wmape * wmape
+
         mae = util.MAE_torch(predict, real, 0.0)
         wmape = util.WMAPE_torch(predict, real, 0.0)
         return mae + self.args.lambda_wmape * wmape
