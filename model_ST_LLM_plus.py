@@ -96,9 +96,9 @@ class PFA(nn.Module):
                     else:
                         param.requires_grad = True
 
-        # Disable GPT-2's hard-coded causal triangle in the last U layers so
-        # spatial nodes can attend across the whole sequence (paper §III.C).
-        for layer_index in range(len(self.gpt2.h) - self.U, len(self.gpt2.h)):
+        # Disable GPT-2's hard-coded causal triangle in ALL layers so spatial
+        # nodes can attend bidirectionally across the full sequence.
+        for layer_index in range(len(self.gpt2.h)):
             attn = self.gpt2.h[layer_index].attn
             attn.bias.fill_(True)
 
@@ -229,13 +229,10 @@ class PFA(nn.Module):
         attention_mask = adjacency_matrix.to(self.device).float() #[64,12,250,250]
         # print(attention_mask.shape)
 
-        # Use GPT-2 with attention mask
-        # Pass adjacency_matrix explicitly so custom_forward applies it only to
-        # the last U layers (paper §III.C). Front F layers get no mask (None).
+        # Use GPT-2 with adjacency mask applied to all layers.
         output = self.custom_forward(
             inputs_embeds=x,
-            attention_mask=None,
-            adjacency_matrix=adjacency_matrix
+            attention_mask=attention_mask
         ).last_hidden_state
         output = self.dropout(output)
 
