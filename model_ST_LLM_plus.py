@@ -370,11 +370,6 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.GELU(),
             nn.Linear(self.hidden_dim // 2, self.output_len),
         )
-        self.residual_gate_head = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim // 4),
-            nn.GELU(),
-            nn.Linear(self.hidden_dim // 4, self.output_len),
-        )
 
     @staticmethod
     def _normalize_adjacency(adjacency_matrix):
@@ -498,10 +493,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             beta, gamma, s0, i0, r0
         )
         residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
-        residual_gate = torch.sigmoid(
-            self.residual_gate_head(encoded).permute(0, 2, 1).unsqueeze(-1)
-        )
-        prediction = torch.clamp_min(y_mech + residual_gate * residual, 0.0)
+        prediction = torch.clamp_min(y_mech + residual, 0.0)
 
         if not return_aux:
             return prediction
@@ -520,5 +512,4 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             "delta_rec": delta_rec,
             "y_mech": y_mech,
             "y_res": residual,
-            "y_res_gate": residual_gate,
         }

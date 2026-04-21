@@ -291,17 +291,13 @@ class Trainer:
             horizon_weights = horizon_weights / horizon_weights.mean()
             abs_error = torch.abs(real - predict)
             mae = (abs_error * horizon_weights).mean()
-            rmse = torch.sqrt((((real - predict) ** 2) * horizon_weights).mean())
             wmape = torch.sum(abs_error * horizon_weights) / torch.sum(
                 torch.abs(real) * horizon_weights
             ).clamp_min(1e-6)
-            return mae + self.args.lambda_wmape * wmape + 0.05 * rmse
+            return mae + self.args.lambda_wmape * wmape
 
         mae = util.MAE_torch(predict, real, 0.0)
-        rmse = util.RMSE_torch(predict, real, 0.0)
         wmape = util.WMAPE_torch(predict, real, 0.0)
-        if self.is_epi_model:
-            return mae + self.args.lambda_wmape * wmape + 0.05 * rmse
         return mae + self.args.lambda_wmape * wmape
 
     def _compute_epi_regularizers(self, model_output):
