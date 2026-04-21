@@ -99,6 +99,12 @@ class PFA(nn.Module):
                     else:
                         param.requires_grad = True
 
+        # Disable GPT-2's hard-coded causal triangle in the last U layers so
+        # spatial nodes can attend across the whole sequence (paper §III.C).
+        for layer_index in range(len(self.gpt2.h) - self.U, len(self.gpt2.h)):
+            attn = self.gpt2.h[layer_index].attn
+            attn.bias.fill_(True)
+
         # self.apply_lora_to_u_layers()
 
     # def apply_lora_to_u_layers(self):
