@@ -226,7 +226,7 @@ class EncoderBackboneMixin:
             dropout_rate=self.dropout_rate,
         )
 
-    def encode(self, history_data, temporal_idx_x=None, use_llm=True):
+    def encode_base(self, history_data, temporal_idx_x=None):
         data = history_data.permute(0, 3, 2, 1)
         batch_size, _, num_nodes, _ = data.shape
 
@@ -252,10 +252,25 @@ class EncoderBackboneMixin:
         data_st = self.in_layer(data_st)
         data_st = Fuct.leaky_relu(data_st)
         data_st = data_st.permute(0, 2, 1, 3).squeeze(-1)
+        return data_st
 
+    def encode(self, history_data, temporal_idx_x=None, use_llm=True, llm_fusion_mode=None):
+        base_encoded = self.encode_base(history_data, temporal_idx_x)
         if not use_llm:
-            return data_st
-        return self.gpt(data_st, self.adj_mx)
+            return base_encoded
+
+        fusion_mode = llm_fusion_mode or getattr(self, "llm_fusion_mode", "direct")
+        if fusion_mode == "none":
+            return base_encoded
+
+        llm_encoded = self.gpt(base_encoded, self.adj_mx)
+        if fusion_mode == "direct":
+            return llm_encoded
+        if fusion_mode == "residual_gate":
+            gate = torch.sigmoid(self.llm_gate_head(base_encoded))
+            return base_encoded + gate * (llm_encoded - base_encoded)
+
+        raise ValueError(f"Unsupported llm_fusion_mode: {fusion_mode}")
 
 
 class ST_LLM(nn.Module, EncoderBackboneMixin):
@@ -280,6 +295,7 @@ class ST_LLM(nn.Module, EncoderBackboneMixin):
         self.llm_layer = llm_layer
         self.U = U
         self.dropout_rate = 0.1
+        self.llm_fusion_mode = "direct"
 
         self._init_encoder_backbone()
         self.regression_layer = nn.Conv2d(self.hidden_dim, self.output_len, kernel_size=(1, 1))
@@ -310,6 +326,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         U=1,
         compartment_dim=16,
         ablation_mode="full",
+        llm_fusion_mode="direct",
     ):
         super().__init__()
         self.device = device
@@ -323,12 +340,19 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         self.compartment_dim = compartment_dim
         self.global_context_dim = 256
         self.ablation_mode = ablation_mode
+        self.llm_fusion_mode = llm_fusion_mode
 
         adj_tensor = torch.tensor(adj_mx, dtype=torch.float32)
         self.adj_mx = adj_tensor.to(self.device)
         self.register_buffer("adj_mx_norm", self._normalize_adjacency(adj_tensor), persistent=False)
 
         self._init_encoder_backbone()
+        self.llm_gate_head = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim // 4),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim // 4, self.hidden_dim),
+        )
+        nn.init.constant_(self.llm_gate_head[-1].bias, -2.0)
 
         self.global_trend = nn.Sequential(
             nn.Linear(self.hidden_dim, self.global_context_dim),
@@ -378,6 +402,9 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         supported_modes = {"full", "no_mech", "mech_only", "no_llm", "fixed_params"}
         if self.ablation_mode not in supported_modes:
             raise ValueError(f"Unsupported ablation_mode: {self.ablation_mode}")
+        supported_fusion_modes = {"direct", "none", "residual_gate"}
+        if self.llm_fusion_mode not in supported_fusion_modes:
+            raise ValueError(f"Unsupported llm_fusion_mode: {self.llm_fusion_mode}")
 
     @staticmethod
     def _normalize_adjacency(adjacency_matrix):
@@ -518,7 +545,12 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         )
 
     def forward(self, history_data, temporal_idx_x=None, return_aux=False):
-        encoded = self.encode(history_data, temporal_idx_x, use_llm=self.ablation_mode != "no_llm")
+        encoded = self.encode(
+            history_data,
+            temporal_idx_x,
+            use_llm=self.ablation_mode != "no_llm",
+            llm_fusion_mode=self.llm_fusion_mode,
+        )
         global_context = self._compute_global_context(encoded)
         joint_context = torch.cat([encoded, global_context], dim=-1)
 

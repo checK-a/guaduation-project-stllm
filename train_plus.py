@@ -92,6 +92,13 @@ def build_parser():
         choices=["full", "no_mech", "mech_only", "no_llm", "fixed_params"],
         help="Epi-ST-LLM+ ablation mode; only used when --model epi_st_llm_plus",
     )
+    parser.add_argument(
+        "--llm_fusion_mode",
+        type=str,
+        default="direct",
+        choices=["direct", "none", "residual_gate"],
+        help="LLM fusion mode for epi_st_llm_plus; direct reproduces V1.1 and residual_gate enables V1.3",
+    )
     return parser
 
 
@@ -168,6 +175,7 @@ def build_model(args, device, adj_mx):
                 args.U,
                 args.compartment_dim,
                 args.ablation_mode,
+                args.llm_fusion_mode,
             )
         return model.to(device)
 
@@ -465,7 +473,7 @@ def main():
     target_suffix = f"_d{args.target_day}" if args.target_day is not None else ""
     ablation_suffix = ""
     if args.model == "epi_st_llm_plus":
-        ablation_suffix = "_" + args.ablation_mode
+        ablation_suffix = "_" + args.ablation_mode + "_" + args.llm_fusion_mode
     path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model + ablation_suffix)
 
     val_time = []
