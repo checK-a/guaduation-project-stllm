@@ -85,6 +85,13 @@ def build_parser():
     parser.add_argument("--lambda_wmape", type=float, default=0.1, help="weight for WMAPE term")
     parser.add_argument("--lambda_mass", type=float, default=0.01, help="weight for mass regularizer")
     parser.add_argument("--lambda_param", type=float, default=0.01, help="weight for parameter smoothness")
+    parser.add_argument(
+        "--ablation_mode",
+        type=str,
+        default="full",
+        choices=["full", "no_mech", "mech_only", "no_llm", "fixed_params"],
+        help="Epi-ST-LLM+ ablation mode; only used when --model epi_st_llm_plus",
+    )
     return parser
 
 
@@ -160,6 +167,7 @@ def build_model(args, device, adj_mx):
                 args.llm_layer,
                 args.U,
                 args.compartment_dim,
+                args.ablation_mode,
             )
         return model.to(device)
 
@@ -301,6 +309,10 @@ class Trainer:
         return mae + self.args.lambda_wmape * wmape
 
     def _compute_epi_regularizers(self, model_output):
+        if model_output.get("skip_mech_regularizers", False):
+            zero = torch.zeros((), device=self.device)
+            return zero, zero
+
         beta = model_output["beta"]
         gamma = model_output["gamma"]
         s0 = model_output["s0"]
@@ -451,7 +463,10 @@ def main():
     bestid = None
     epochs_since_best_mae = 0
     target_suffix = f"_d{args.target_day}" if args.target_day is not None else ""
-    path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model)
+    ablation_suffix = ""
+    if args.model == "epi_st_llm_plus":
+        ablation_suffix = "_" + args.ablation_mode
+    path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model + ablation_suffix)
 
     val_time = []
     train_time = []

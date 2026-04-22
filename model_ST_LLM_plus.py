@@ -226,7 +226,7 @@ class EncoderBackboneMixin:
             dropout_rate=self.dropout_rate,
         )
 
-    def encode(self, history_data, temporal_idx_x=None):
+    def encode(self, history_data, temporal_idx_x=None, use_llm=True):
         data = history_data.permute(0, 3, 2, 1)
         batch_size, _, num_nodes, _ = data.shape
 
@@ -253,6 +253,8 @@ class EncoderBackboneMixin:
         data_st = Fuct.leaky_relu(data_st)
         data_st = data_st.permute(0, 2, 1, 3).squeeze(-1)
 
+        if not use_llm:
+            return data_st
         return self.gpt(data_st, self.adj_mx)
 
 
@@ -307,6 +309,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         llm_layer=6,
         U=1,
         compartment_dim=16,
+        ablation_mode="full",
     ):
         super().__init__()
         self.device = device
@@ -319,6 +322,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         self.dropout_rate = 0.1
         self.compartment_dim = compartment_dim
         self.global_context_dim = 256
+        self.ablation_mode = ablation_mode
 
         adj_tensor = torch.tensor(adj_mx, dtype=torch.float32)
         self.adj_mx = adj_tensor.to(self.device)
@@ -361,7 +365,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.Linear(self.compartment_dim, self.compartment_dim),
         )
         self.observation_head = nn.Sequential(
-            nn.Linear(self.compartment_dim * 3, self.compartment_dim),
+            nn.Linear(self.compartment_dim * 2, self.compartment_dim),
             nn.GELU(),
             nn.Linear(self.compartment_dim, 1),
         )
@@ -370,6 +374,10 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.GELU(),
             nn.Linear(self.hidden_dim // 2, self.output_len),
         )
+
+        supported_modes = {"full", "no_mech", "mech_only", "no_llm", "fixed_params"}
+        if self.ablation_mode not in supported_modes:
+            raise ValueError(f"Unsupported ablation_mode: {self.ablation_mode}")
 
     @staticmethod
     def _normalize_adjacency(adjacency_matrix):
@@ -436,7 +444,35 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
     def _predict_parameters(self, joint_context):
         beta = torch.sigmoid(self.beta_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
         gamma = torch.sigmoid(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        if self.ablation_mode == "fixed_params":
+            beta = beta.mean(dim=1, keepdim=True).repeat(1, self.output_len, 1, 1)
+            gamma = gamma.mean(dim=1, keepdim=True).repeat(1, self.output_len, 1, 1)
         return beta, gamma
+
+    def _build_no_mech_outputs(self, residual, beta, gamma, s0, i0, r0):
+        batch_size = residual.size(0)
+        zero_prediction = torch.clamp_min(residual, 0.0)
+        zero_mech = torch.zeros_like(residual)
+        state_shape = (batch_size, self.output_len, self.num_nodes, self.compartment_dim)
+        zero_states = torch.zeros(state_shape, device=residual.device, dtype=residual.dtype)
+        flow_shape = (batch_size, self.output_len, self.num_nodes, 1)
+        zero_flows = torch.zeros(flow_shape, device=residual.device, dtype=residual.dtype)
+        return {
+            "prediction": zero_prediction,
+            "beta": beta,
+            "gamma": gamma,
+            "s0": s0,
+            "i0": i0,
+            "r0": r0,
+            "S": zero_states,
+            "I": zero_states,
+            "R": zero_states,
+            "delta_inf": zero_flows,
+            "delta_rec": zero_flows,
+            "y_mech": zero_mech,
+            "y_res": residual,
+            "skip_mech_regularizers": True,
+        }
 
     def _rollout(self, beta, gamma, s0, i0, r0):
         s_prev, i_prev, r_prev = s0, i0, r0
@@ -457,9 +493,8 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             delta_inf = torch.minimum(beta_t * inf_base, s_prev)
             delta_rec = torch.minimum(gamma_t * rec_base, i_prev + delta_inf)
 
-            base_cases = delta_inf.mean(dim=-1, keepdim=True)
             y_mech_t = Fuct.softplus(
-                base_cases + self.observation_head(torch.cat([delta_inf, delta_rec, i_prev], dim=-1))
+                self.observation_head(torch.cat([delta_inf, i_prev], dim=-1))
             )
 
             s_prev = torch.clamp_min(s_prev - delta_inf, 0.0)
@@ -483,17 +518,27 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         )
 
     def forward(self, history_data, temporal_idx_x=None, return_aux=False):
-        encoded = self.encode(history_data, temporal_idx_x)
+        encoded = self.encode(history_data, temporal_idx_x, use_llm=self.ablation_mode != "no_llm")
         global_context = self._compute_global_context(encoded)
         joint_context = torch.cat([encoded, global_context], dim=-1)
 
         beta, gamma = self._predict_parameters(joint_context)
         s0, i0, r0 = self._init_compartments(encoded, history_data)
+        residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
+
+        if self.ablation_mode == "no_mech":
+            outputs = self._build_no_mech_outputs(residual, beta, gamma, s0, i0, r0)
+            if not return_aux:
+                return outputs["prediction"]
+            return outputs
+
         y_mech, s_states, i_states, r_states, delta_inf, delta_rec = self._rollout(
             beta, gamma, s0, i0, r0
         )
-        residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
-        prediction = torch.clamp_min(y_mech + residual, 0.0)
+        if self.ablation_mode == "mech_only":
+            prediction = y_mech
+        else:
+            prediction = torch.clamp_min(y_mech + residual, 0.0)
 
         if not return_aux:
             return prediction
@@ -512,4 +557,5 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             "delta_rec": delta_rec,
             "y_mech": y_mech,
             "y_res": residual,
+            "skip_mech_regularizers": False,
         }
