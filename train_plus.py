@@ -17,6 +17,16 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:180"
 
 
 def build_parser():
+    def str2bool(value):
+        if isinstance(value, bool):
+            return value
+        value = value.lower()
+        if value in {"true", "1", "yes", "y"}:
+            return True
+        if value in {"false", "0", "no", "n"}:
+            return False
+        raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda:0", help="")
     parser.add_argument("--data", type=str, default="bike_drop", help="dataset name")
@@ -42,6 +52,12 @@ def build_parser():
     )
     parser.add_argument("--llm_layer", type=int, default=6, help="llm layer")
     parser.add_argument("--U", type=int, default=1, help="unfrozen layer")
+    parser.add_argument(
+        "--stllm_use_llm",
+        type=str2bool,
+        default=True,
+        help="whether ST-LLM+ uses the GPT/PFA branch; set false for the ST-LLM+ w/o LLM ablation",
+    )
     parser.add_argument("--n_hidden", type=int, default=64, help="baseline hidden size")
     parser.add_argument("--n_layer", type=int, default=1, help="baseline recurrent layers")
     parser.add_argument("--dropout", type=float, default=0.2, help="baseline dropout")
@@ -205,6 +221,7 @@ def build_model(args, device, adj_mx):
                 args.output_len,
                 args.llm_layer,
                 args.U,
+                args.stllm_use_llm,
             )
         elif args.model == "epi_st_llm_plus_v2b":
             model = EpiSTLLMPlusV2b(
@@ -534,7 +551,9 @@ def main():
     epochs_since_best_mae = 0
     target_suffix = f"_d{args.target_day}" if args.target_day is not None else ""
     ablation_suffix = ""
-    if args.model == "epi_st_llm_plus":
+    if args.model == "st_llm_plus":
+        ablation_suffix = "_full" if args.stllm_use_llm else "_no_llm"
+    elif args.model == "epi_st_llm_plus":
         ablation_suffix = "_" + args.ablation_mode + "_" + args.llm_fusion_mode
     elif args.model == "epi_st_llm_plus_v2b":
         ablation_suffix = (

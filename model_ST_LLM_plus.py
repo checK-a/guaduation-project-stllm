@@ -342,6 +342,7 @@ class ST_LLM(nn.Module, EncoderBackboneMixin):
         output_len=12,
         llm_layer=6,
         U=1,
+        use_llm=True,
     ):
         super().__init__()
         self.device = device
@@ -352,6 +353,7 @@ class ST_LLM(nn.Module, EncoderBackboneMixin):
         self.output_len = output_len
         self.llm_layer = llm_layer
         self.U = U
+        self.use_llm = use_llm
         self.dropout_rate = 0.1
         self.llm_fusion_mode = "direct"
 
@@ -365,7 +367,7 @@ class ST_LLM(nn.Module, EncoderBackboneMixin):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, history_data, temporal_idx_x=None):
-        encoded = self.encode(history_data, temporal_idx_x)
+        encoded = self.encode(history_data, temporal_idx_x, use_llm=self.use_llm)
         outputs = encoded.permute(0, 2, 1).unsqueeze(-1)
         outputs = self.regression_layer(outputs)
         return outputs
