@@ -24,7 +24,7 @@ def build_parser():
         "--model",
         type=str,
         default="st_llm_plus",
-        choices=["st_llm_plus", "epi_st_llm_plus", "AR", "VAR", "cola_gnn", "STGCN"],
+        choices=["st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b", "AR", "VAR", "cola_gnn", "STGCN"],
         help="model name",
     )
     parser.add_argument("--batch_size", type=int, default=64, help="batch size")
@@ -90,14 +90,39 @@ def build_parser():
         type=str,
         default="full",
         choices=["full", "no_mech", "mech_only", "no_llm", "fixed_params"],
-        help="Epi-ST-LLM+ ablation mode; only used when --model epi_st_llm_plus",
+        help="Epi-ST-LLM+ ablation mode; only used for epi models",
     )
     parser.add_argument(
         "--llm_fusion_mode",
         type=str,
-        default="direct",
+        default=None,
         choices=["direct", "none", "residual_gate"],
-        help="LLM fusion mode for epi_st_llm_plus; direct reproduces V1.1 and residual_gate enables V1.3",
+        help="LLM fusion mode for epi models; defaults to direct for epi_st_llm_plus and residual_gate for epi_st_llm_plus_v2b",
+    )
+    parser.add_argument(
+        "--temporal_patch_len",
+        type=int,
+        default=4,
+        help="temporal patch length for epi_st_llm_plus_v2b",
+    )
+    parser.add_argument(
+        "--temporal_patch_stride",
+        type=int,
+        default=4,
+        help="temporal patch stride for epi_st_llm_plus_v2b; must equal temporal_patch_len in V2b",
+    )
+    parser.add_argument(
+        "--graph_bias_mode",
+        type=str,
+        default=None,
+        choices=["patch_graph_bias"],
+        help="graph attention bias mode for epi_st_llm_plus_v2b",
+    )
+    parser.add_argument(
+        "--graph_bias_scale_init",
+        type=float,
+        default=1.0,
+        help="initial scale for graph attention bias in epi_st_llm_plus_v2b",
     )
     return parser
 
@@ -135,7 +160,9 @@ def resolve_dataset_config(args):
             raise ValueError(
                 f"--target_day must be in [1, {args.full_output_len}] for dataset {dataset_name}"
             )
-        args.output_len = args.full_output_len if args.model == "epi_st_llm_plus" else 1
+        args.output_len = (
+            args.full_output_len if args.model in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"} else 1
+        )
     else:
         args.output_len = args.full_output_len
 
@@ -144,13 +171,29 @@ def resolve_dataset_config(args):
     return dataset_name
 
 
+def resolve_model_config(args):
+    if args.model == "epi_st_llm_plus_v2b":
+        if args.llm_fusion_mode is None:
+            args.llm_fusion_mode = "residual_gate"
+        if args.graph_bias_mode is None:
+            args.graph_bias_mode = "patch_graph_bias"
+    elif args.model == "epi_st_llm_plus":
+        if args.llm_fusion_mode is None:
+            args.llm_fusion_mode = "direct"
+        args.graph_bias_mode = None
+    else:
+        if args.llm_fusion_mode is None:
+            args.llm_fusion_mode = "direct"
+        args.graph_bias_mode = None
+
+
 def load_adj_mx(dataset_path):
     return util.load_graph_data(f"{dataset_path}/adj_mx.pkl")
 
 
 def build_model(args, device, adj_mx):
-    if args.model in {"st_llm_plus", "epi_st_llm_plus"}:
-        from model_ST_LLM_plus import EpiSTLLMPlus, ST_LLM
+    if args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
+        from model_ST_LLM_plus import EpiSTLLMPlus, EpiSTLLMPlusV2b, ST_LLM
 
         if args.model == "st_llm_plus":
             model = ST_LLM(
@@ -162,6 +205,24 @@ def build_model(args, device, adj_mx):
                 args.output_len,
                 args.llm_layer,
                 args.U,
+            )
+        elif args.model == "epi_st_llm_plus_v2b":
+            model = EpiSTLLMPlusV2b(
+                device,
+                adj_mx,
+                args.input_dim,
+                args.num_nodes,
+                args.input_len,
+                args.output_len,
+                args.llm_layer,
+                args.U,
+                args.compartment_dim,
+                args.ablation_mode,
+                args.llm_fusion_mode,
+                args.temporal_patch_len,
+                args.temporal_patch_stride,
+                args.graph_bias_mode,
+                args.graph_bias_scale_init,
             )
         else:
             model = EpiSTLLMPlus(
@@ -215,10 +276,10 @@ class Trainer:
         self.model = build_model(args, device, adj_mx)
         self.model.to(device)
         self.device = device
-        self.output_is_normalized = args.model != "epi_st_llm_plus"
-        self.is_epi_model = args.model == "epi_st_llm_plus"
+        self.output_is_normalized = args.model not in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"}
+        self.is_epi_model = args.model in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"}
         self.stage3_started = False
-        self.use_warm_start = self.is_epi_model and bool(args.warm_start_ckpt)
+        self.use_warm_start = args.model == "epi_st_llm_plus" and bool(args.warm_start_ckpt)
 
         optimizer_name = args.optimizer
         if optimizer_name is None:
@@ -266,7 +327,7 @@ class Trainer:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
     def _prepare_input(self, x, temporal_idx_x=None):
-        if self.args.model in {"st_llm_plus", "epi_st_llm_plus"}:
+        if self.args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
             model_x = x.transpose(1, 3)
             model_temporal = temporal_idx_x
         else:
@@ -275,7 +336,7 @@ class Trainer:
         return model_x, model_temporal
 
     def _format_output(self, output):
-        if self.args.model in {"st_llm_plus", "epi_st_llm_plus"}:
+        if self.args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
             return output.transpose(1, 3)
         return output.transpose(1, 2).unsqueeze(1)
 
@@ -458,6 +519,7 @@ def main():
     args = parser.parse_args()
     seed_it(6666)
     dataset_name = resolve_dataset_config(args)
+    resolve_model_config(args)
     adj_mx = load_adj_mx(args.data)
 
     device = torch.device(args.device)
@@ -474,6 +536,16 @@ def main():
     ablation_suffix = ""
     if args.model == "epi_st_llm_plus":
         ablation_suffix = "_" + args.ablation_mode + "_" + args.llm_fusion_mode
+    elif args.model == "epi_st_llm_plus_v2b":
+        ablation_suffix = (
+            "_"
+            + args.ablation_mode
+            + f"_p{args.temporal_patch_len}"
+            + "_"
+            + args.llm_fusion_mode
+            + "_"
+            + args.graph_bias_mode
+        )
     path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model + ablation_suffix)
 
     val_time = []

@@ -45,6 +45,38 @@ class TemporalEmbedding(nn.Module):
         return temporal_emb.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_nodes, -1)
 
 
+class TemporalSequenceEmbedding(nn.Module):
+    def __init__(self, features):
+        super().__init__()
+        self.week_embedding = nn.Embedding(54, features)
+        self.day_of_week_embedding = nn.Embedding(7, features)
+        self.day_of_year_embedding = nn.Embedding(366, features)
+        nn.init.xavier_uniform_(self.week_embedding.weight)
+        nn.init.xavier_uniform_(self.day_of_week_embedding.weight)
+        nn.init.xavier_uniform_(self.day_of_year_embedding.weight)
+
+    def forward(self, temporal_idx_x):
+        if temporal_idx_x is None:
+            raise ValueError("temporal_idx_x must not be None when using TemporalSequenceEmbedding.")
+
+        if temporal_idx_x.ndim == 2:
+            temporal_idx_x = temporal_idx_x.unsqueeze(-1)
+
+        if temporal_idx_x.size(-1) == 1:
+            week_idx = temporal_idx_x[..., 0].long().clamp(0, self.week_embedding.num_embeddings - 1)
+            temporal_emb = self.week_embedding(week_idx)
+        else:
+            dow_idx = temporal_idx_x[..., 0].long().clamp(
+                0, self.day_of_week_embedding.num_embeddings - 1
+            )
+            doy_idx = temporal_idx_x[..., 1].long().clamp(
+                0, self.day_of_year_embedding.num_embeddings - 1
+            )
+            temporal_emb = self.day_of_week_embedding(dow_idx) + self.day_of_year_embedding(doy_idx)
+
+        return temporal_emb
+
+
 @dataclass
 class BaseModelOutputWithPastAndCrossAttentions:
     last_hidden_state: torch.FloatTensor = None
@@ -112,6 +144,7 @@ class PFA(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         adjacency_matrix: Optional[torch.FloatTensor] = None,
+        graph_bias: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, dict]:
         output_attentions = (
             output_attentions if output_attentions is not None else self.gpt2.config.output_attentions
@@ -157,15 +190,27 @@ class PFA(nn.Module):
 
         total_layers = len(self.gpt2.h)
         for i, (block, layer_past) in enumerate(zip(self.gpt2.h, past_key_values)):
-            if i >= total_layers - self.U and adjacency_matrix is not None:
-                attention_mask = adjacency_matrix.to(hidden_states.device).float()
-            elif attention_mask is not None:
-                attention_mask = attention_mask.to(hidden_states.device)
+            layer_attention_mask = attention_mask.to(hidden_states.device) if attention_mask is not None else None
+            if i >= total_layers - self.U:
+                if adjacency_matrix is not None:
+                    adjacency_bias = adjacency_matrix.to(hidden_states.device).float()
+                    layer_attention_mask = (
+                        adjacency_bias
+                        if layer_attention_mask is None
+                        else layer_attention_mask + adjacency_bias
+                    )
+                if graph_bias is not None:
+                    graph_layer_bias = graph_bias.to(hidden_states.device).float()
+                    layer_attention_mask = (
+                        graph_layer_bias
+                        if layer_attention_mask is None
+                        else layer_attention_mask + graph_layer_bias
+                    )
 
             outputs = block(
                 hidden_states,
                 layer_past=layer_past,
-                attention_mask=attention_mask,
+                attention_mask=layer_attention_mask,
                 head_mask=head_mask[i] if head_mask is not None else None,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
@@ -194,14 +239,27 @@ class PFA(nn.Module):
             attentions=all_self_attentions,
         )
 
-    def forward(self, x, adjacency_matrix):
+    def forward(self, x, adjacency_matrix=None, graph_bias=None):
         batch_size = x.shape[0]
         num_heads = self.gpt2.config.n_head
-        adjacency_matrix = adjacency_matrix.unsqueeze(0).repeat(batch_size, 1, 1)
-        adjacency_matrix = adjacency_matrix.unsqueeze(1).repeat(1, num_heads, 1, 1)
-        attention_mask = adjacency_matrix.to(self.device).float()
+        expanded_adjacency = None
+        expanded_graph_bias = None
 
-        output = self.custom_forward(inputs_embeds=x, attention_mask=attention_mask).last_hidden_state
+        if adjacency_matrix is not None:
+            expanded_adjacency = adjacency_matrix.unsqueeze(0).repeat(batch_size, 1, 1)
+            expanded_adjacency = expanded_adjacency.unsqueeze(1).repeat(1, num_heads, 1, 1)
+            expanded_adjacency = expanded_adjacency.to(self.device).float()
+
+        if graph_bias is not None:
+            expanded_graph_bias = graph_bias.unsqueeze(0).repeat(batch_size, 1, 1)
+            expanded_graph_bias = expanded_graph_bias.unsqueeze(1).repeat(1, num_heads, 1, 1)
+            expanded_graph_bias = expanded_graph_bias.to(self.device).float()
+
+        output = self.custom_forward(
+            inputs_embeds=x,
+            adjacency_matrix=expanded_adjacency,
+            graph_bias=expanded_graph_bias,
+        ).last_hidden_state
         output = self.dropout(output)
         return output
 
@@ -591,3 +649,178 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             "y_res": residual,
             "skip_mech_regularizers": False,
         }
+
+
+class EpiSTLLMPlusV2b(EpiSTLLMPlus):
+    def __init__(
+        self,
+        device,
+        adj_mx,
+        input_dim=1,
+        num_nodes=51,
+        input_len=24,
+        output_len=10,
+        llm_layer=6,
+        U=1,
+        compartment_dim=16,
+        ablation_mode="full",
+        llm_fusion_mode="residual_gate",
+        temporal_patch_len=4,
+        temporal_patch_stride=4,
+        graph_bias_mode="patch_graph_bias",
+        graph_bias_scale_init=1.0,
+    ):
+        self.temporal_patch_len = temporal_patch_len
+        self.temporal_patch_stride = temporal_patch_stride
+        self.graph_bias_mode = graph_bias_mode
+        self.graph_bias_scale_init = graph_bias_scale_init
+        if self.temporal_patch_stride != self.temporal_patch_len:
+            raise ValueError("EpiSTLLMPlusV2b currently requires temporal_patch_stride == temporal_patch_len.")
+        if input_len % temporal_patch_len != 0:
+            raise ValueError("EpiSTLLMPlusV2b requires input_len % temporal_patch_len == 0.")
+        self.patch_count = input_len // temporal_patch_len
+
+        super().__init__(
+            device,
+            adj_mx,
+            input_dim,
+            num_nodes,
+            input_len,
+            output_len,
+            llm_layer,
+            U,
+            compartment_dim,
+            ablation_mode,
+            llm_fusion_mode,
+        )
+
+        supported_graph_bias_modes = {"patch_graph_bias"}
+        if self.graph_bias_mode not in supported_graph_bias_modes:
+            raise ValueError(f"Unsupported graph_bias_mode: {self.graph_bias_mode}")
+
+        graph_adj = self._normalize_adjacency(
+            self.adj_mx.detach().clone() + torch.eye(self.num_nodes, device=self.adj_mx.device)
+        )
+        patch_graph_bias = torch.kron(
+            torch.eye(self.patch_count, device=graph_adj.device, dtype=graph_adj.dtype),
+            graph_adj,
+        )
+        self.register_buffer("patch_graph_bias", patch_graph_bias, persistent=False)
+        self.graph_bias_scale = nn.Parameter(
+            torch.tensor(float(self.graph_bias_scale_init), device=self.adj_mx.device)
+        )
+
+    def _init_encoder_backbone(self):
+        self.temporal_seq_emb = TemporalSequenceEmbedding(self.gpt_channel)
+        self.value_patch_conv = nn.Conv1d(
+            self.input_dim,
+            self.hidden_dim,
+            kernel_size=self.temporal_patch_len,
+            stride=self.temporal_patch_stride,
+        )
+        self.time_patch_conv = nn.Conv1d(
+            self.gpt_channel,
+            self.hidden_dim,
+            kernel_size=self.temporal_patch_len,
+            stride=self.temporal_patch_stride,
+        )
+        self.node_emb = nn.Parameter(torch.empty(self.num_nodes, self.hidden_dim))
+        self.patch_pos_emb = nn.Parameter(torch.empty(self.patch_count, self.hidden_dim))
+        nn.init.xavier_uniform_(self.node_emb)
+        nn.init.xavier_uniform_(self.patch_pos_emb)
+
+        self.token_norm = nn.LayerNorm(self.hidden_dim)
+        self.dropout = nn.Dropout(p=self.dropout_rate)
+        self.gpt = PFA(
+            device=self.device,
+            gpt_layers=self.llm_layer,
+            U=self.U,
+            dropout_rate=self.dropout_rate,
+        )
+        self.readout_proj = nn.Sequential(
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+        )
+
+    def freeze_encoder_for_stage2(self):
+        encoder_modules = [
+            self.temporal_seq_emb,
+            self.value_patch_conv,
+            self.time_patch_conv,
+            self.token_norm,
+            self.readout_proj,
+            self.gpt,
+        ]
+        self.node_emb.requires_grad = False
+        self.patch_pos_emb.requires_grad = False
+        for module in encoder_modules:
+            for param in module.parameters():
+                param.requires_grad = False
+
+    def _build_temporal_tokens(self, history_data, temporal_idx_x=None):
+        history_sequence = history_data.permute(0, 3, 2, 1)
+        batch_size, input_len, num_nodes, _ = history_sequence.shape
+        if input_len != self.input_len:
+            raise ValueError(
+                f"EpiSTLLMPlusV2b expected history length {self.input_len}, got {input_len}."
+            )
+
+        if temporal_idx_x is None:
+            temporal_idx_x = torch.zeros(
+                (batch_size, self.input_len, 1), dtype=torch.long, device=history_data.device
+            )
+
+        value_series = history_sequence.permute(0, 2, 3, 1).reshape(
+            batch_size * num_nodes, self.input_dim, self.input_len
+        )
+        value_tokens = self.value_patch_conv(value_series)
+        value_tokens = value_tokens.transpose(1, 2).reshape(
+            batch_size, num_nodes, self.patch_count, self.hidden_dim
+        )
+        value_tokens = value_tokens.permute(0, 2, 1, 3)
+
+        time_sequence_emb = self.temporal_seq_emb(temporal_idx_x).transpose(1, 2)
+        time_tokens = self.time_patch_conv(time_sequence_emb).transpose(1, 2).unsqueeze(2)
+        time_tokens = time_tokens.expand(-1, -1, num_nodes, -1)
+
+        node_tokens = self.node_emb.unsqueeze(0).unsqueeze(0).expand(batch_size, self.patch_count, -1, -1)
+        patch_tokens = self.patch_pos_emb.unsqueeze(0).unsqueeze(2).expand(batch_size, -1, num_nodes, -1)
+
+        token_base = value_tokens + time_tokens + node_tokens + patch_tokens
+        token_base = self.token_norm(token_base)
+        token_base = self.dropout(token_base)
+        return token_base
+
+    def _readout_tokens(self, token_tensor):
+        last_patch_repr = token_tensor[:, -1, :, :]
+        mean_patch_repr = token_tensor.mean(dim=1)
+        return self.readout_proj(torch.cat([last_patch_repr, mean_patch_repr], dim=-1))
+
+    def encode(self, history_data, temporal_idx_x=None, use_llm=True, llm_fusion_mode=None):
+        token_base = self._build_temporal_tokens(history_data, temporal_idx_x)
+        batch_size = token_base.size(0)
+        token_base_flat = token_base.reshape(batch_size, self.patch_count * self.num_nodes, self.hidden_dim)
+
+        if not use_llm:
+            return self._readout_tokens(token_base)
+
+        fusion_mode = llm_fusion_mode or getattr(self, "llm_fusion_mode", "residual_gate")
+        if fusion_mode == "none":
+            return self._readout_tokens(token_base)
+
+        graph_bias = None
+        if self.graph_bias_mode == "patch_graph_bias":
+            graph_bias = self.graph_bias_scale * self.patch_graph_bias
+
+        token_ctx_flat = self.gpt(token_base_flat, graph_bias=graph_bias)
+        if fusion_mode == "direct":
+            token_fused_flat = token_ctx_flat
+        elif fusion_mode == "residual_gate":
+            gate = torch.sigmoid(self.llm_gate_head(token_base_flat))
+            token_fused_flat = token_base_flat + gate * (token_ctx_flat - token_base_flat)
+        else:
+            raise ValueError(f"Unsupported llm_fusion_mode: {fusion_mode}")
+
+        token_fused = token_fused_flat.reshape(batch_size, self.patch_count, self.num_nodes, self.hidden_dim)
+        return self._readout_tokens(token_fused)
