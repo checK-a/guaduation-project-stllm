@@ -115,7 +115,7 @@ def build_parser():
         "--graph_bias_mode",
         type=str,
         default=None,
-        choices=["patch_graph_bias"],
+        choices=["patch_graph_bias", "none"],
         help="graph attention bias mode for epi_st_llm_plus_v2b",
     )
     parser.add_argument(

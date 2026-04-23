@@ -694,7 +694,7 @@ class EpiSTLLMPlusV2b(EpiSTLLMPlus):
             llm_fusion_mode,
         )
 
-        supported_graph_bias_modes = {"patch_graph_bias"}
+        supported_graph_bias_modes = {"patch_graph_bias", "none"}
         if self.graph_bias_mode not in supported_graph_bias_modes:
             raise ValueError(f"Unsupported graph_bias_mode: {self.graph_bias_mode}")
 
