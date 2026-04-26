@@ -246,12 +246,34 @@ class PFA(nn.Module):
         expanded_graph_bias = None
 
         if adjacency_matrix is not None:
-            expanded_adjacency = adjacency_matrix.unsqueeze(0).repeat(batch_size, 1, 1)
+            if adjacency_matrix.dim() == 2:
+                expanded_adjacency = adjacency_matrix.unsqueeze(0).repeat(batch_size, 1, 1)
+            elif adjacency_matrix.dim() == 3:
+                if adjacency_matrix.size(0) != batch_size:
+                    raise ValueError(
+                        "Batch-wise adjacency must have the same batch size as the input: "
+                        f"got {adjacency_matrix.size(0)} and {batch_size}."
+                    )
+                expanded_adjacency = adjacency_matrix
+            else:
+                raise ValueError(
+                    f"adjacency_matrix must be [N, N] or [B, N, N], got {tuple(adjacency_matrix.shape)}."
+                )
             expanded_adjacency = expanded_adjacency.unsqueeze(1).repeat(1, num_heads, 1, 1)
             expanded_adjacency = expanded_adjacency.to(self.device).float()
 
         if graph_bias is not None:
-            expanded_graph_bias = graph_bias.unsqueeze(0).repeat(batch_size, 1, 1)
+            if graph_bias.dim() == 2:
+                expanded_graph_bias = graph_bias.unsqueeze(0).repeat(batch_size, 1, 1)
+            elif graph_bias.dim() == 3:
+                if graph_bias.size(0) != batch_size:
+                    raise ValueError(
+                        "Batch-wise graph_bias must have the same batch size as the input: "
+                        f"got {graph_bias.size(0)} and {batch_size}."
+                    )
+                expanded_graph_bias = graph_bias
+            else:
+                raise ValueError(f"graph_bias must be [N, N] or [B, N, N], got {tuple(graph_bias.shape)}.")
             expanded_graph_bias = expanded_graph_bias.unsqueeze(1).repeat(1, num_heads, 1, 1)
             expanded_graph_bias = expanded_graph_bias.to(self.device).float()
 
@@ -365,6 +387,182 @@ class ST_LLM(nn.Module, EncoderBackboneMixin):
 
     def count_trainable_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def forward(self, history_data, temporal_idx_x=None):
+        encoded = self.encode(history_data, temporal_idx_x, use_llm=self.use_llm)
+        outputs = encoded.permute(0, 2, 1).unsqueeze(-1)
+        outputs = self.regression_layer(outputs)
+        return outputs
+
+
+class GraphContextLayer(nn.Module):
+    def __init__(self, hidden_dim, dropout_rate=0.1):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, node_states, adjacency):
+        if adjacency.dim() == 2:
+            aggregated = torch.einsum("nm,bmd->bnd", adjacency, node_states)
+        elif adjacency.dim() == 3:
+            aggregated = torch.bmm(adjacency, node_states)
+        else:
+            raise ValueError(f"Expected adjacency [N, N] or [B, N, N], got {tuple(adjacency.shape)}.")
+        return self.norm(node_states + self.proj(aggregated))
+
+
+class DynamicGraphHead(nn.Module):
+    def __init__(self, hidden_dim, graph_dim=64, dropout_rate=0.1):
+        super().__init__()
+        context_dim = hidden_dim * 3
+        self.query_proj = nn.Sequential(
+            nn.Linear(context_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim // 2, graph_dim),
+        )
+        self.key_proj = nn.Sequential(
+            nn.Linear(context_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim // 2, graph_dim),
+        )
+        self.graph_dim = graph_dim
+
+    def forward(self, base_states, graph_states):
+        global_context = base_states.mean(dim=1, keepdim=True).expand(-1, base_states.size(1), -1)
+        context = torch.cat([base_states, graph_states, global_context], dim=-1)
+        query = self.query_proj(context)
+        key = self.key_proj(context)
+        logits = torch.bmm(query, key.transpose(1, 2)) / (self.graph_dim ** 0.5)
+        return torch.sigmoid(logits)
+
+
+class DynamicTransmissionSTLLM(nn.Module, EncoderBackboneMixin):
+    def __init__(
+        self,
+        device,
+        adj_mx,
+        semantic_adj_mx=None,
+        input_dim=1,
+        num_nodes=51,
+        input_len=24,
+        output_len=4,
+        llm_layer=6,
+        U=1,
+        use_llm=True,
+        dt_graph_mode="static_semantic_dynamic",
+        dynamic_graph_top_k=10,
+        semantic_graph_top_k=8,
+        dynamic_graph_alpha_init=1.0,
+        dynamic_graph_dim=64,
+    ):
+        super().__init__()
+        supported_modes = {"static", "dynamic", "static_dynamic", "static_semantic_dynamic"}
+        if dt_graph_mode not in supported_modes:
+            raise ValueError(f"Unsupported dt_graph_mode: {dt_graph_mode}")
+
+        self.device = device
+        self.input_dim = input_dim
+        self.num_nodes = num_nodes
+        self.input_len = input_len
+        self.output_len = output_len
+        self.llm_layer = llm_layer
+        self.U = U
+        self.use_llm = use_llm
+        self.dropout_rate = 0.1
+        self.llm_fusion_mode = "direct"
+        self.dt_graph_mode = dt_graph_mode
+        self.dynamic_graph_top_k = int(dynamic_graph_top_k)
+        self.semantic_graph_top_k = int(semantic_graph_top_k)
+
+        static_adj = torch.tensor(adj_mx, dtype=torch.float32)
+        if semantic_adj_mx is None:
+            semantic_adj = torch.zeros_like(static_adj)
+            semantic_adj.fill_diagonal_(1.0)
+        else:
+            semantic_adj = torch.tensor(semantic_adj_mx, dtype=torch.float32)
+
+        self.register_buffer("adj_mx", static_adj.to(self.device), persistent=False)
+        self.register_buffer("semantic_adj_mx", semantic_adj.to(self.device), persistent=False)
+        self.static_semantic_logits = nn.Parameter(torch.zeros(2))
+        self.dynamic_alpha_logit = nn.Parameter(torch.tensor(float(dynamic_graph_alpha_init)))
+
+        self._init_encoder_backbone()
+        self.graph_context = GraphContextLayer(self.hidden_dim, self.dropout_rate)
+        self.dynamic_graph_head = DynamicGraphHead(
+            self.hidden_dim,
+            graph_dim=int(dynamic_graph_dim),
+            dropout_rate=self.dropout_rate,
+        )
+        self.regression_layer = nn.Conv2d(self.hidden_dim, self.output_len, kernel_size=(1, 1))
+
+    @staticmethod
+    def _row_normalize(adjacency):
+        return adjacency / adjacency.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+
+    def _normalize_static(self, adjacency):
+        adjacency = adjacency.float().clone()
+        adjacency = torch.clamp(adjacency, min=0.0)
+        adjacency.fill_diagonal_(1.0)
+        return self._row_normalize(adjacency)
+
+    def _build_base_graph(self):
+        static_adj = self._normalize_static(self.adj_mx)
+        if self.dt_graph_mode in {"static", "static_dynamic"}:
+            return static_adj
+
+        semantic_adj = self._normalize_static(self.semantic_adj_mx)
+        weights = torch.softmax(self.static_semantic_logits, dim=0)
+        base_graph = weights[0] * static_adj + weights[1] * semantic_adj
+        return self._row_normalize(base_graph)
+
+    def _sparsify_dynamic_graph(self, dynamic_graph):
+        batch_size, num_nodes, _ = dynamic_graph.shape
+        device = dynamic_graph.device
+        top_k = max(0, min(int(self.dynamic_graph_top_k), num_nodes - 1))
+        sparse = torch.zeros_like(dynamic_graph)
+        off_diag = dynamic_graph.clone()
+        eye = torch.eye(num_nodes, device=device, dtype=torch.bool).unsqueeze(0)
+        off_diag = off_diag.masked_fill(eye, -1.0)
+        if top_k > 0:
+            _, indices = torch.topk(off_diag, k=top_k, dim=-1)
+            sparse.scatter_(-1, indices, dynamic_graph.gather(-1, indices))
+        sparse = sparse.masked_fill(eye, 1.0)
+        return self._row_normalize(sparse)
+
+    def build_effective_graph(self, base_encoded):
+        base_graph = self._build_base_graph().to(base_encoded.device)
+        if self.dt_graph_mode == "static":
+            return base_graph.unsqueeze(0).expand(base_encoded.size(0), -1, -1)
+
+        graph_context = self.graph_context(base_encoded, base_graph)
+        dynamic_graph = self._sparsify_dynamic_graph(
+            self.dynamic_graph_head(base_encoded, graph_context)
+        )
+
+        if self.dt_graph_mode == "dynamic":
+            effective_graph = dynamic_graph
+        else:
+            alpha = torch.sigmoid(self.dynamic_alpha_logit)
+            base_graph_batch = base_graph.unsqueeze(0).expand(base_encoded.size(0), -1, -1)
+            effective_graph = alpha * base_graph_batch + (1.0 - alpha) * dynamic_graph
+            effective_graph = self._row_normalize(effective_graph)
+
+        return effective_graph
+
+    def encode(self, history_data, temporal_idx_x=None, use_llm=True, llm_fusion_mode=None):
+        base_encoded = self.encode_base(history_data, temporal_idx_x)
+        if not use_llm:
+            return base_encoded
+
+        effective_graph = self.build_effective_graph(base_encoded)
+        return self.gpt(base_encoded, effective_graph)
 
     def forward(self, history_data, temporal_idx_x=None):
         encoded = self.encode(history_data, temporal_idx_x, use_llm=self.use_llm)

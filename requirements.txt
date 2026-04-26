@@ -2,6 +2,7 @@ numpy
 scipy
 pandas
 requests
+tqdm
 transformers
 peft
 torch==2.3.1+cu118 --index-url https://download.pytorch.org/whl/cu118

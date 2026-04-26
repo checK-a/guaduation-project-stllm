@@ -16,6 +16,17 @@ from ranger21 import Ranger
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:180"
 
 
+def safe_torch_save(state_dict, save_path):
+    try:
+        torch.save(state_dict, save_path)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "inline_container.cc" not in message and "unexpected pos" not in message:
+            raise
+        print("torch.save failed with zip serialization; retrying with legacy serialization.", flush=True)
+        torch.save(state_dict, save_path, _use_new_zipfile_serialization=False)
+
+
 def build_parser():
     def str2bool(value):
         if isinstance(value, bool):
@@ -34,7 +45,16 @@ def build_parser():
         "--model",
         type=str,
         default="st_llm_plus",
-        choices=["st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b", "AR", "VAR", "cola_gnn", "STGCN"],
+        choices=[
+            "st_llm_plus",
+            "dt_st_llm_plus",
+            "epi_st_llm_plus",
+            "epi_st_llm_plus_v2b",
+            "AR",
+            "VAR",
+            "cola_gnn",
+            "STGCN",
+        ],
         help="model name",
     )
     parser.add_argument("--batch_size", type=int, default=64, help="batch size")
@@ -140,6 +160,21 @@ def build_parser():
         default=1.0,
         help="initial scale for graph attention bias in epi_st_llm_plus_v2b",
     )
+    parser.add_argument(
+        "--dt_graph_mode",
+        type=str,
+        default="static_semantic_dynamic",
+        choices=["static", "dynamic", "static_dynamic", "static_semantic_dynamic"],
+        help="graph mode for dt_st_llm_plus",
+    )
+    parser.add_argument("--dynamic_graph_top_k", type=int, default=10, help="top-k outgoing dynamic graph edges")
+    parser.add_argument("--semantic_graph_top_k", type=int, default=8, help="top-k semantic graph edges")
+    parser.add_argument(
+        "--dynamic_graph_alpha_init",
+        type=float,
+        default=1.0,
+        help="initial logit for static-vs-dynamic fusion in dt_st_llm_plus",
+    )
     return parser
 
 
@@ -207,9 +242,36 @@ def load_adj_mx(dataset_path):
     return util.load_graph_data(f"{dataset_path}/adj_mx.pkl")
 
 
-def build_model(args, device, adj_mx):
-    if args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
-        from model_ST_LLM_plus import EpiSTLLMPlus, EpiSTLLMPlusV2b, ST_LLM
+def build_semantic_adj_mx(dataset_path, top_k):
+    if top_k <= 0:
+        return None
+
+    train_npz = Path(dataset_path) / "train.npz"
+    if not train_npz.exists():
+        return None
+
+    x_train = np.load(train_npz)["x"][..., 0]
+    num_nodes = x_train.shape[2]
+    series_by_node = x_train.transpose(2, 0, 1).reshape(num_nodes, -1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.corrcoef(series_by_node)
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    corr = np.maximum(corr, 0.0).astype(np.float32)
+    np.fill_diagonal(corr, 0.0)
+
+    semantic_adj = np.zeros_like(corr, dtype=np.float32)
+    k = max(0, min(int(top_k), num_nodes - 1))
+    if k > 0:
+        top_indices = np.argpartition(-corr, kth=k - 1, axis=1)[:, :k]
+        row_indices = np.arange(num_nodes)[:, None]
+        semantic_adj[row_indices, top_indices] = corr[row_indices, top_indices]
+    np.fill_diagonal(semantic_adj, 1.0)
+    return semantic_adj
+
+
+def build_model(args, device, adj_mx, semantic_adj_mx=None):
+    if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
+        from model_ST_LLM_plus import DynamicTransmissionSTLLM, EpiSTLLMPlus, EpiSTLLMPlusV2b, ST_LLM
 
         if args.model == "st_llm_plus":
             model = ST_LLM(
@@ -222,6 +284,23 @@ def build_model(args, device, adj_mx):
                 args.llm_layer,
                 args.U,
                 args.stllm_use_llm,
+            )
+        elif args.model == "dt_st_llm_plus":
+            model = DynamicTransmissionSTLLM(
+                device,
+                adj_mx,
+                semantic_adj_mx,
+                args.input_dim,
+                args.num_nodes,
+                args.input_len,
+                args.output_len,
+                args.llm_layer,
+                args.U,
+                args.stllm_use_llm,
+                args.dt_graph_mode,
+                args.dynamic_graph_top_k,
+                args.semantic_graph_top_k,
+                args.dynamic_graph_alpha_init,
             )
         elif args.model == "epi_st_llm_plus_v2b":
             model = EpiSTLLMPlusV2b(
@@ -287,10 +366,12 @@ def build_model(args, device, adj_mx):
 
 
 class Trainer:
-    def __init__(self, args, scaler, adj_mx, device):
+    llm_family = {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}
+
+    def __init__(self, args, scaler, adj_mx, device, semantic_adj_mx=None):
         self.args = args
         self.scaler = scaler
-        self.model = build_model(args, device, adj_mx)
+        self.model = build_model(args, device, adj_mx, semantic_adj_mx)
         self.model.to(device)
         self.device = device
         self.output_is_normalized = args.model not in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"}
@@ -300,7 +381,7 @@ class Trainer:
 
         optimizer_name = args.optimizer
         if optimizer_name is None:
-            optimizer_name = "ranger" if args.model in {"st_llm_plus", "epi_st_llm_plus"} else "adam"
+            optimizer_name = "ranger" if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus"} else "adam"
         if optimizer_name == "ranger":
             self.optimizer = Ranger(self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay)
         else:
@@ -344,7 +425,7 @@ class Trainer:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
     def _prepare_input(self, x, temporal_idx_x=None):
-        if self.args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
+        if self.args.model in self.llm_family:
             model_x = x.transpose(1, 3)
             model_temporal = temporal_idx_x
         else:
@@ -353,7 +434,7 @@ class Trainer:
         return model_x, model_temporal
 
     def _format_output(self, output):
-        if self.args.model in {"st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
+        if self.args.model in self.llm_family:
             return output.transpose(1, 3)
         return output.transpose(1, 2).unsqueeze(1)
 
@@ -434,7 +515,11 @@ class Trainer:
             output = self._format_output(model_output["prediction"])
         else:
             model_output = None
-            output = self.model(model_x, model_temporal) if self.args.model == "st_llm_plus" else self.model(model_x)[0]
+            output = (
+                self.model(model_x, model_temporal)
+                if self.args.model in {"st_llm_plus", "dt_st_llm_plus"}
+                else self.model(model_x)[0]
+            )
             output = self._format_output(output)
 
         output_for_loss = self._select_prediction_day(output)
@@ -482,7 +567,7 @@ class Trainer:
             else:
                 output = (
                     self.model(model_x, model_temporal)
-                    if self.args.model == "st_llm_plus"
+                    if self.args.model in {"st_llm_plus", "dt_st_llm_plus"}
                     else self.model(model_x)[0]
                 )
             return self._format_output(output)
@@ -538,6 +623,9 @@ def main():
     dataset_name = resolve_dataset_config(args)
     resolve_model_config(args)
     adj_mx = load_adj_mx(args.data)
+    semantic_adj_mx = None
+    if args.model == "dt_st_llm_plus":
+        semantic_adj_mx = build_semantic_adj_mx(args.data, args.semantic_graph_top_k)
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -553,6 +641,10 @@ def main():
     ablation_suffix = ""
     if args.model == "st_llm_plus":
         ablation_suffix = "_full" if args.stllm_use_llm else "_no_llm"
+    elif args.model == "dt_st_llm_plus":
+        ablation_suffix = "_" + args.dt_graph_mode
+        if not args.stllm_use_llm:
+            ablation_suffix += "_no_llm"
     elif args.model == "epi_st_llm_plus":
         ablation_suffix = "_" + args.ablation_mode + "_" + args.llm_fusion_mode
     elif args.model == "epi_st_llm_plus_v2b":
@@ -576,7 +668,7 @@ def main():
     if not os.path.exists(path):
         os.makedirs(path)
 
-    engine = Trainer(args, scaler, adj_mx, device)
+    engine = Trainer(args, scaler, adj_mx, device, semantic_adj_mx)
 
     print("start training...", flush=True)
     for i in range(1, args.epochs + 1):
@@ -683,7 +775,7 @@ def main():
         if mvalid_loss < best_valid_loss:
             print("###Update tasks appear###")
             best_valid_loss = mvalid_loss
-            torch.save(engine.model.state_dict(), os.path.join(path, "best_model.pth"))
+            safe_torch_save(engine.model.state_dict(), os.path.join(path, "best_model.pth"))
             bestid = i
             epochs_since_best_mae = 0
             print("Updating! Valid Loss:{:.4f}, epoch: {}".format(mvalid_loss, i))
