@@ -163,11 +163,11 @@ def build_parser():
     parser.add_argument(
         "--dt_graph_mode",
         type=str,
-        default="static_semantic_dynamic",
+        default="static_dynamic",
         choices=["static", "dynamic", "static_dynamic", "static_semantic_dynamic"],
         help="graph mode for dt_st_llm_plus",
     )
-    parser.add_argument("--dynamic_graph_top_k", type=int, default=10, help="top-k outgoing dynamic graph edges")
+    parser.add_argument("--dynamic_graph_top_k", type=int, default=5, help="top-k outgoing dynamic graph edges")
     parser.add_argument("--semantic_graph_top_k", type=int, default=8, help="top-k semantic graph edges")
     parser.add_argument(
         "--dynamic_graph_alpha_init",

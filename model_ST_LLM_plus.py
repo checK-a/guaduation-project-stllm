@@ -490,7 +490,8 @@ class DynamicTransmissionSTLLM(nn.Module, EncoderBackboneMixin):
 
         self.register_buffer("adj_mx", static_adj.to(self.device), persistent=False)
         self.register_buffer("semantic_adj_mx", semantic_adj.to(self.device), persistent=False)
-        self.static_semantic_logits = nn.Parameter(torch.zeros(2))
+        # Start from a static-dominant blend; semantic edges can earn weight later.
+        self.static_semantic_logits = nn.Parameter(torch.tensor([2.0, -2.0], dtype=torch.float32))
         self.dynamic_alpha_logit = nn.Parameter(torch.tensor(float(dynamic_graph_alpha_init)))
 
         self._init_encoder_backbone()
@@ -536,6 +537,12 @@ class DynamicTransmissionSTLLM(nn.Module, EncoderBackboneMixin):
         sparse = sparse.masked_fill(eye, 1.0)
         return self._row_normalize(sparse)
 
+    @staticmethod
+    def _graph_to_bias(graph):
+        # Convert normalized graph weights into a stronger attention bias:
+        # larger edges stay near 0, weak / pruned edges become strongly negative.
+        return torch.log(graph.clamp_min(1e-6))
+
     def build_effective_graph(self, base_encoded):
         base_graph = self._build_base_graph().to(base_encoded.device)
         if self.dt_graph_mode == "static":
@@ -551,7 +558,7 @@ class DynamicTransmissionSTLLM(nn.Module, EncoderBackboneMixin):
         else:
             alpha = torch.sigmoid(self.dynamic_alpha_logit)
             base_graph_batch = base_graph.unsqueeze(0).expand(base_encoded.size(0), -1, -1)
-            effective_graph = alpha * base_graph_batch + (1.0 - alpha) * dynamic_graph
+            effective_graph = (1.0 - alpha) * base_graph_batch + alpha * dynamic_graph
             effective_graph = self._row_normalize(effective_graph)
 
         return effective_graph
@@ -562,7 +569,8 @@ class DynamicTransmissionSTLLM(nn.Module, EncoderBackboneMixin):
             return base_encoded
 
         effective_graph = self.build_effective_graph(base_encoded)
-        return self.gpt(base_encoded, effective_graph)
+        graph_bias = self._graph_to_bias(effective_graph)
+        return self.gpt(base_encoded, graph_bias=graph_bias)
 
     def forward(self, history_data, temporal_idx_x=None):
         encoded = self.encode(history_data, temporal_idx_x, use_llm=self.use_llm)
