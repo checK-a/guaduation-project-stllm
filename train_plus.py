@@ -136,6 +136,19 @@ def build_parser():
         help="LLM fusion mode for epi models; defaults to direct for epi_st_llm_plus and residual_gate for epi_st_llm_plus_v2b",
     )
     parser.add_argument(
+        "--epi_param_generator",
+        type=str,
+        default="mlp",
+        choices=["mlp", "cross_attn"],
+        help="parameter generator for epi_st_llm_plus beta/gamma heads",
+    )
+    parser.add_argument(
+        "--epi_param_attn_heads",
+        type=int,
+        default=4,
+        help="number of attention heads for cross-attention epi parameter generator",
+    )
+    parser.add_argument(
         "--temporal_patch_len",
         type=int,
         default=4,
@@ -315,6 +328,8 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
                 args.compartment_dim,
                 args.ablation_mode,
                 args.llm_fusion_mode,
+                args.epi_param_generator,
+                args.epi_param_attn_heads,
                 args.temporal_patch_len,
                 args.temporal_patch_stride,
                 args.graph_bias_mode,
@@ -333,6 +348,8 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
                 args.compartment_dim,
                 args.ablation_mode,
                 args.llm_fusion_mode,
+                args.epi_param_generator,
+                args.epi_param_attn_heads,
             )
         return model.to(device)
 
@@ -646,7 +663,14 @@ def main():
         if not args.stllm_use_llm:
             ablation_suffix += "_no_llm"
     elif args.model == "epi_st_llm_plus":
-        ablation_suffix = "_" + args.ablation_mode + "_" + args.llm_fusion_mode
+        ablation_suffix = (
+            "_"
+            + args.ablation_mode
+            + "_"
+            + args.llm_fusion_mode
+            + "_param_"
+            + args.epi_param_generator
+        )
     elif args.model == "epi_st_llm_plus_v2b":
         ablation_suffix = (
             "_"
@@ -656,6 +680,8 @@ def main():
             + args.llm_fusion_mode
             + "_"
             + args.graph_bias_mode
+            + "_param_"
+            + args.epi_param_generator
         )
     path = os.path.join(args.save + dataset_name + target_suffix + "_" + args.model + ablation_suffix)
 

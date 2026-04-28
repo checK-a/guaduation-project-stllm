@@ -593,6 +593,8 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         compartment_dim=16,
         ablation_mode="full",
         llm_fusion_mode="direct",
+        param_generator="mlp",
+        param_attn_heads=4,
     ):
         super().__init__()
         self.device = device
@@ -607,6 +609,22 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         self.global_context_dim = 256
         self.ablation_mode = ablation_mode
         self.llm_fusion_mode = llm_fusion_mode
+        self.param_generator = param_generator
+        self.param_attn_heads = int(param_attn_heads)
+
+        supported_modes = {"full", "no_mech", "mech_only", "no_llm", "fixed_params"}
+        if self.ablation_mode not in supported_modes:
+            raise ValueError(f"Unsupported ablation_mode: {self.ablation_mode}")
+        supported_fusion_modes = {"direct", "none", "residual_gate"}
+        if self.llm_fusion_mode not in supported_fusion_modes:
+            raise ValueError(f"Unsupported llm_fusion_mode: {self.llm_fusion_mode}")
+        supported_param_generators = {"mlp", "cross_attn"}
+        if self.param_generator not in supported_param_generators:
+            raise ValueError(f"Unsupported param_generator: {self.param_generator}")
+        if self.hidden_dim % self.param_attn_heads != 0:
+            raise ValueError(
+                f"hidden_dim={self.hidden_dim} must be divisible by param_attn_heads={self.param_attn_heads}."
+            )
 
         adj_tensor = torch.tensor(adj_mx, dtype=torch.float32)
         self.adj_mx = adj_tensor.to(self.device)
@@ -636,6 +654,30 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.GELU(),
             nn.Linear(self.hidden_dim, self.output_len),
         )
+        if self.param_generator == "cross_attn":
+            self.horizon_emb = nn.Embedding(self.output_len, self.hidden_dim)
+            self.param_query_proj = nn.Sequential(
+                nn.Linear(joint_dim + self.hidden_dim, self.hidden_dim),
+                nn.GELU(),
+                nn.Dropout(self.dropout_rate),
+                nn.Linear(self.hidden_dim, self.hidden_dim),
+            )
+            self.param_cross_attn = nn.MultiheadAttention(
+                embed_dim=self.hidden_dim,
+                num_heads=self.param_attn_heads,
+                dropout=self.dropout_rate,
+                batch_first=True,
+            )
+            self.param_attn_norm = nn.LayerNorm(self.hidden_dim)
+            self.param_ffn = nn.Sequential(
+                nn.Linear(self.hidden_dim, self.hidden_dim),
+                nn.GELU(),
+                nn.Dropout(self.dropout_rate),
+                nn.Linear(self.hidden_dim, self.hidden_dim),
+            )
+            self.param_ffn_norm = nn.LayerNorm(self.hidden_dim)
+            self.beta_token_head = nn.Linear(self.hidden_dim, 1)
+            self.gamma_token_head = nn.Linear(self.hidden_dim, 1)
 
         self.s0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
         self.i0_head = nn.Linear(self.hidden_dim, self.compartment_dim)
@@ -664,13 +706,6 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.GELU(),
             nn.Linear(self.hidden_dim // 2, self.output_len),
         )
-
-        supported_modes = {"full", "no_mech", "mech_only", "no_llm", "fixed_params"}
-        if self.ablation_mode not in supported_modes:
-            raise ValueError(f"Unsupported ablation_mode: {self.ablation_mode}")
-        supported_fusion_modes = {"direct", "none", "residual_gate"}
-        if self.llm_fusion_mode not in supported_fusion_modes:
-            raise ValueError(f"Unsupported llm_fusion_mode: {self.llm_fusion_mode}")
 
     @staticmethod
     def _normalize_adjacency(adjacency_matrix):
@@ -734,9 +769,46 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         r0 = Fuct.softplus(self.r0_head(encoded))
         return s0, i0, r0
 
-    def _predict_parameters(self, joint_context):
+    def _predict_parameters_mlp(self, joint_context):
         beta = torch.sigmoid(self.beta_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
         gamma = torch.sigmoid(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
+        return beta, gamma
+
+    def _predict_parameters_cross_attn(self, encoded, global_context):
+        batch_size, num_nodes, _ = encoded.shape
+        horizon_ids = torch.arange(self.output_len, device=encoded.device)
+        horizon_emb = self.horizon_emb(horizon_ids)
+        horizon_emb = horizon_emb.view(1, self.output_len, 1, self.hidden_dim).expand(
+            batch_size, -1, num_nodes, -1
+        )
+
+        node_context = encoded.unsqueeze(1).expand(-1, self.output_len, -1, -1)
+        global_context = global_context.unsqueeze(1).expand(-1, self.output_len, -1, -1)
+        query_input = torch.cat([node_context, global_context, horizon_emb], dim=-1)
+        query_tokens = self.param_query_proj(query_input).reshape(
+            batch_size, self.output_len * num_nodes, self.hidden_dim
+        )
+
+        attn_output, _ = self.param_cross_attn(
+            query=query_tokens,
+            key=encoded,
+            value=encoded,
+            need_weights=False,
+        )
+        param_tokens = self.param_attn_norm(query_tokens + attn_output)
+        param_tokens = self.param_ffn_norm(param_tokens + self.param_ffn(param_tokens))
+        param_tokens = param_tokens.view(batch_size, self.output_len, num_nodes, self.hidden_dim)
+
+        beta = torch.sigmoid(self.beta_token_head(param_tokens))
+        gamma = torch.sigmoid(self.gamma_token_head(param_tokens))
+        return beta, gamma
+
+    def _predict_parameters(self, encoded, global_context):
+        joint_context = torch.cat([encoded, global_context], dim=-1)
+        if self.param_generator == "cross_attn":
+            beta, gamma = self._predict_parameters_cross_attn(encoded, global_context)
+        else:
+            beta, gamma = self._predict_parameters_mlp(joint_context)
         if self.ablation_mode == "fixed_params":
             beta = beta.mean(dim=1, keepdim=True).repeat(1, self.output_len, 1, 1)
             gamma = gamma.mean(dim=1, keepdim=True).repeat(1, self.output_len, 1, 1)
@@ -818,9 +890,8 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             llm_fusion_mode=self.llm_fusion_mode,
         )
         global_context = self._compute_global_context(encoded)
-        joint_context = torch.cat([encoded, global_context], dim=-1)
 
-        beta, gamma = self._predict_parameters(joint_context)
+        beta, gamma = self._predict_parameters(encoded, global_context)
         s0, i0, r0 = self._init_compartments(encoded, history_data)
         residual = self.residual_head(encoded).permute(0, 2, 1).unsqueeze(-1)
 
@@ -873,6 +944,8 @@ class EpiSTLLMPlusV2b(EpiSTLLMPlus):
         compartment_dim=16,
         ablation_mode="full",
         llm_fusion_mode="residual_gate",
+        param_generator="mlp",
+        param_attn_heads=4,
         temporal_patch_len=4,
         temporal_patch_stride=4,
         graph_bias_mode="patch_graph_bias",
@@ -900,6 +973,8 @@ class EpiSTLLMPlusV2b(EpiSTLLMPlus):
             compartment_dim,
             ablation_mode,
             llm_fusion_mode,
+            param_generator,
+            param_attn_heads,
         )
 
         supported_graph_bias_modes = {"patch_graph_bias", "none"}
