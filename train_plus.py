@@ -139,7 +139,7 @@ def build_parser():
         "--epi_param_generator",
         type=str,
         default="mlp",
-        choices=["mlp", "cross_attn"],
+        choices=["mlp", "cross_attn", "temporal_cross_attn"],
         help="parameter generator for epi_st_llm_plus beta/gamma heads",
     )
     parser.add_argument(

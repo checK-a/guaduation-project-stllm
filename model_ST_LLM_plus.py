@@ -618,7 +618,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         supported_fusion_modes = {"direct", "none", "residual_gate"}
         if self.llm_fusion_mode not in supported_fusion_modes:
             raise ValueError(f"Unsupported llm_fusion_mode: {self.llm_fusion_mode}")
-        supported_param_generators = {"mlp", "cross_attn"}
+        supported_param_generators = {"mlp", "cross_attn", "temporal_cross_attn"}
         if self.param_generator not in supported_param_generators:
             raise ValueError(f"Unsupported param_generator: {self.param_generator}")
         if self.hidden_dim % self.param_attn_heads != 0:
@@ -654,7 +654,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             nn.GELU(),
             nn.Linear(self.hidden_dim, self.output_len),
         )
-        if self.param_generator == "cross_attn":
+        if self.param_generator in {"cross_attn", "temporal_cross_attn"}:
             self.horizon_emb = nn.Embedding(self.output_len, self.hidden_dim)
             self.param_query_proj = nn.Sequential(
                 nn.Linear(joint_dim + self.hidden_dim, self.hidden_dim),
@@ -662,6 +662,21 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                 nn.Dropout(self.dropout_rate),
                 nn.Linear(self.hidden_dim, self.hidden_dim),
             )
+            if self.param_generator == "temporal_cross_attn":
+                self.param_temporal_attn = nn.MultiheadAttention(
+                    embed_dim=self.hidden_dim,
+                    num_heads=self.param_attn_heads,
+                    dropout=self.dropout_rate,
+                    batch_first=True,
+                )
+                self.param_temporal_norm = nn.LayerNorm(self.hidden_dim)
+                self.param_temporal_ffn = nn.Sequential(
+                    nn.Linear(self.hidden_dim, self.hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(self.dropout_rate),
+                    nn.Linear(self.hidden_dim, self.hidden_dim),
+                )
+                self.param_temporal_ffn_norm = nn.LayerNorm(self.hidden_dim)
             self.param_cross_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
                 num_heads=self.param_attn_heads,
@@ -774,7 +789,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         gamma = torch.sigmoid(self.gamma_head(joint_context)).permute(0, 2, 1).unsqueeze(-1)
         return beta, gamma
 
-    def _predict_parameters_cross_attn(self, encoded, global_context):
+    def _build_param_query_tokens(self, encoded, global_context):
         batch_size, num_nodes, _ = encoded.shape
         horizon_ids = torch.arange(self.output_len, device=encoded.device)
         horizon_emb = self.horizon_emb(horizon_ids)
@@ -785,10 +800,11 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         node_context = encoded.unsqueeze(1).expand(-1, self.output_len, -1, -1)
         global_context = global_context.unsqueeze(1).expand(-1, self.output_len, -1, -1)
         query_input = torch.cat([node_context, global_context, horizon_emb], dim=-1)
-        query_tokens = self.param_query_proj(query_input).reshape(
-            batch_size, self.output_len * num_nodes, self.hidden_dim
-        )
+        return self.param_query_proj(query_input)
 
+    def _apply_param_cross_attn(self, query_tokens, encoded):
+        batch_size, _, num_nodes, _ = query_tokens.shape
+        query_tokens = query_tokens.reshape(batch_size, self.output_len * num_nodes, self.hidden_dim)
         attn_output, _ = self.param_cross_attn(
             query=query_tokens,
             key=encoded,
@@ -798,14 +814,47 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         param_tokens = self.param_attn_norm(query_tokens + attn_output)
         param_tokens = self.param_ffn_norm(param_tokens + self.param_ffn(param_tokens))
         param_tokens = param_tokens.view(batch_size, self.output_len, num_nodes, self.hidden_dim)
+        return param_tokens
 
+    def _predict_parameters_cross_attn(self, encoded, global_context):
+        param_tokens = self._apply_param_cross_attn(
+            self._build_param_query_tokens(encoded, global_context),
+            encoded,
+        )
+        beta = torch.sigmoid(self.beta_token_head(param_tokens))
+        gamma = torch.sigmoid(self.gamma_token_head(param_tokens))
+        return beta, gamma
+
+    def _predict_parameters_temporal_cross_attn(self, encoded, global_context):
+        query_tokens = self._build_param_query_tokens(encoded, global_context)
+        batch_size, _, num_nodes, _ = query_tokens.shape
+        temporal_tokens = query_tokens.permute(0, 2, 1, 3).reshape(
+            batch_size * num_nodes, self.output_len, self.hidden_dim
+        )
+        temporal_output, _ = self.param_temporal_attn(
+            query=temporal_tokens,
+            key=temporal_tokens,
+            value=temporal_tokens,
+            need_weights=False,
+        )
+        temporal_tokens = self.param_temporal_norm(temporal_tokens + temporal_output)
+        temporal_tokens = self.param_temporal_ffn_norm(
+            temporal_tokens + self.param_temporal_ffn(temporal_tokens)
+        )
+        query_tokens = temporal_tokens.view(
+            batch_size, num_nodes, self.output_len, self.hidden_dim
+        ).permute(0, 2, 1, 3)
+
+        param_tokens = self._apply_param_cross_attn(query_tokens, encoded)
         beta = torch.sigmoid(self.beta_token_head(param_tokens))
         gamma = torch.sigmoid(self.gamma_token_head(param_tokens))
         return beta, gamma
 
     def _predict_parameters(self, encoded, global_context):
         joint_context = torch.cat([encoded, global_context], dim=-1)
-        if self.param_generator == "cross_attn":
+        if self.param_generator == "temporal_cross_attn":
+            beta, gamma = self._predict_parameters_temporal_cross_attn(encoded, global_context)
+        elif self.param_generator == "cross_attn":
             beta, gamma = self._predict_parameters_cross_attn(encoded, global_context)
         else:
             beta, gamma = self._predict_parameters_mlp(joint_context)
