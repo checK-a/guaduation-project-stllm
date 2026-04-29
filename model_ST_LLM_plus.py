@@ -669,7 +669,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     dropout=self.dropout_rate,
                     batch_first=True,
                 )
-                self.param_temporal_attn_gate_logit = nn.Parameter(torch.tensor(-2.0))
+                self.param_temporal_attn_gate_logit = nn.Parameter(torch.tensor(-1.0))
                 self.param_temporal_norm = nn.LayerNorm(self.hidden_dim)
                 self.param_temporal_ffn = nn.Sequential(
                     nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -677,7 +677,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     nn.Dropout(self.dropout_rate),
                     nn.Linear(self.hidden_dim, self.hidden_dim),
                 )
-                self.param_temporal_ffn_gate_logit = nn.Parameter(torch.tensor(-2.0))
+                self.param_temporal_ffn_gate_logit = nn.Parameter(torch.tensor(-1.0))
                 self.param_temporal_ffn_norm = nn.LayerNorm(self.hidden_dim)
             self.param_cross_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
