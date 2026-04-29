@@ -669,6 +669,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     dropout=self.dropout_rate,
                     batch_first=True,
                 )
+                self.param_temporal_attn_gate_logit = nn.Parameter(torch.tensor(-2.0))
                 self.param_temporal_norm = nn.LayerNorm(self.hidden_dim)
                 self.param_temporal_ffn = nn.Sequential(
                     nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -676,6 +677,7 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     nn.Dropout(self.dropout_rate),
                     nn.Linear(self.hidden_dim, self.hidden_dim),
                 )
+                self.param_temporal_ffn_gate_logit = nn.Parameter(torch.tensor(-2.0))
                 self.param_temporal_ffn_norm = nn.LayerNorm(self.hidden_dim)
             self.param_cross_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
@@ -837,9 +839,14 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             value=temporal_tokens,
             need_weights=False,
         )
-        temporal_tokens = self.param_temporal_norm(temporal_tokens + temporal_output)
+        temporal_attn_gate = torch.sigmoid(self.param_temporal_attn_gate_logit)
+        temporal_tokens = self.param_temporal_norm(
+            temporal_tokens + temporal_attn_gate * temporal_output
+        )
+        temporal_ffn_output = self.param_temporal_ffn(temporal_tokens)
+        temporal_ffn_gate = torch.sigmoid(self.param_temporal_ffn_gate_logit)
         temporal_tokens = self.param_temporal_ffn_norm(
-            temporal_tokens + self.param_temporal_ffn(temporal_tokens)
+            temporal_tokens + temporal_ffn_gate * temporal_ffn_output
         )
         query_tokens = temporal_tokens.view(
             batch_size, num_nodes, self.output_len, self.hidden_dim
