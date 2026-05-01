@@ -52,6 +52,14 @@ def build_parser():
             "epi_st_llm_plus_v2b",
             "AR",
             "VAR",
+            "Persistence",
+            "GRU",
+            "LSTM",
+            "DCRNN",
+            "EpiGNN",
+            "EpiGNNLite",
+            "SIR",
+            "PatchTST",
             "cola_gnn",
             "STGCN",
         ],
@@ -82,8 +90,27 @@ def build_parser():
     parser.add_argument("--n_layer", type=int, default=1, help="baseline recurrent layers")
     parser.add_argument("--dropout", type=float, default=0.2, help="baseline dropout")
     parser.add_argument("--rnn_model", type=str, default="GRU", choices=["LSTM", "GRU", "RNN"])
+    parser.add_argument(
+        "--dcrnn_filter_type",
+        type=str,
+        default="laplacian",
+        choices=["laplacian", "random_walk", "dual_random_walk"],
+        help="diffusion filter type for the EARTH PyTorch DCRNN baseline",
+    )
     parser.add_argument("--bi", action="store_true", help="use bidirectional RNN in cola_gnn")
     parser.add_argument("--k", type=int, default=10, help="cola_gnn convolution channels")
+    parser.add_argument("--epignn_k", type=int, default=8, help="EpiGNN multi-scale convolution kernels")
+    parser.add_argument("--epignn_hidA", type=int, default=64, help="EpiGNN global transmission attention hidden size")
+    parser.add_argument("--epignn_hidP", type=int, default=1, help="EpiGNN adaptive pooling height")
+    parser.add_argument("--epignn_gcn_layers", type=int, default=2, help="EpiGNN GCN layer count")
+    parser.add_argument("--epignn_highway_window", type=int, default=0, help="EpiGNN autoregressive highway window")
+    parser.add_argument(
+        "--epignn_residual_concat",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="whether EpiGNN concatenates all GCN layer states like the optional residual branch",
+    )
     parser.add_argument(
         "--optimizer",
         type=str,
@@ -353,7 +380,20 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
             )
         return model.to(device)
 
-    from earth_baselines import AR, STGCN, VAR, cola_gnn
+    from earth_baselines import (
+        AR,
+        DCRNNModel,
+        EpiGNNLite,
+        EpiGNNModel,
+        GRUBaseline,
+        LSTMBaseline,
+        PatchTST,
+        Persistence,
+        SIRBaseline,
+        STGCN,
+        VAR,
+        cola_gnn,
+    )
 
     baseline_data = SimpleNamespace(
         m=args.num_nodes,
@@ -366,6 +406,22 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
         model = AR(args, baseline_data)
     elif args.model == "VAR":
         model = VAR(args, baseline_data)
+    elif args.model == "Persistence":
+        model = Persistence(args, baseline_data)
+    elif args.model == "GRU":
+        model = GRUBaseline(args, baseline_data)
+    elif args.model == "LSTM":
+        model = LSTMBaseline(args, baseline_data)
+    elif args.model == "DCRNN":
+        model = DCRNNModel(args, baseline_data)
+    elif args.model == "EpiGNN":
+        model = EpiGNNModel(args, baseline_data)
+    elif args.model == "EpiGNNLite":
+        model = EpiGNNLite(args, baseline_data)
+    elif args.model == "SIR":
+        model = SIRBaseline(args, baseline_data)
+    elif args.model == "PatchTST":
+        model = PatchTST(args, baseline_data)
     elif args.model == "cola_gnn":
         model = cola_gnn(args, baseline_data)
     elif args.model == "STGCN":
@@ -384,14 +440,21 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
 
 class Trainer:
     llm_family = {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}
+    raw_output_models = {"SIR"}
 
     def __init__(self, args, scaler, adj_mx, device, semantic_adj_mx=None):
         self.args = args
         self.scaler = scaler
+        self.args.scaler_mean = scaler.mean
+        self.args.scaler_std = scaler.std
         self.model = build_model(args, device, adj_mx, semantic_adj_mx)
         self.model.to(device)
         self.device = device
-        self.output_is_normalized = args.model not in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"}
+        self.output_is_normalized = args.model not in {
+            "epi_st_llm_plus",
+            "epi_st_llm_plus_v2b",
+            *self.raw_output_models,
+        }
         self.is_epi_model = args.model in {"epi_st_llm_plus", "epi_st_llm_plus_v2b"}
         self.stage3_started = False
         self.use_warm_start = args.model == "epi_st_llm_plus" and bool(args.warm_start_ckpt)
@@ -399,11 +462,14 @@ class Trainer:
         optimizer_name = args.optimizer
         if optimizer_name is None:
             optimizer_name = "ranger" if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus"} else "adam"
-        if optimizer_name == "ranger":
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        if not trainable_params:
+            self.optimizer = None
+        elif optimizer_name == "ranger":
             self.optimizer = Ranger(self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay)
         else:
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay
+                trainable_params, lr=args.lrate, weight_decay=args.wdecay
             )
 
         self.clip = 5
@@ -523,7 +589,8 @@ class Trainer:
         model_x, model_temporal = self._prepare_input(x, temporal_idx_x)
         if training:
             self.model.train()
-            self.optimizer.zero_grad()
+            if self.optimizer is not None:
+                self.optimizer.zero_grad()
         else:
             self.model.eval()
 
@@ -550,7 +617,7 @@ class Trainer:
             mass_loss, param_loss = self._compute_epi_regularizers(model_output)
             loss = loss + self.args.lambda_mass * mass_loss + self.args.lambda_param * param_loss
 
-        if training:
+        if training and self.optimizer is not None:
             loss.backward()
             if self.clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
@@ -620,13 +687,18 @@ def evaluate_testset(engine, dataloader, scaler, device, output_len, target_day=
 
     if target_day is not None:
         target_idx = target_day - 1
-        pred = yhat[:, :, target_idx] if engine.is_epi_model else scaler.inverse_transform(yhat[:, :, 0])
+        if engine.is_epi_model:
+            pred = yhat[:, :, target_idx]
+        else:
+            pred = yhat[:, :, 0]
+            if engine.output_is_normalized:
+                pred = scaler.inverse_transform(pred)
         real = realy[:, :, target_idx]
         return util.metric(pred, real)
 
     horizon_metrics = []
     for i in range(output_len):
-        pred = yhat[:, :, i] if engine.is_epi_model else scaler.inverse_transform(yhat[:, :, i])
+        pred = yhat[:, :, i] if not engine.output_is_normalized else scaler.inverse_transform(yhat[:, :, i])
         real = realy[:, :, i]
         horizon_metrics.append(util.metric(pred, real))
 
