@@ -50,6 +50,8 @@ def build_parser():
             "dt_st_llm_plus",
             "epi_st_llm_plus",
             "epi_st_llm_plus_v2b",
+            "GCNGPT",
+            "GATGPT",
             "AR",
             "VAR",
             "Persistence",
@@ -310,7 +312,36 @@ def build_semantic_adj_mx(dataset_path, top_k):
 
 
 def build_model(args, device, adj_mx, semantic_adj_mx=None):
-    if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}:
+    if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b", "GCNGPT", "GATGPT"}:
+        if args.model == "GCNGPT":
+            from model_GCNGPT import GCNGPT
+
+            model = GCNGPT(
+                device=device,
+                adj_mx=adj_mx,
+                input_dim=args.input_dim,
+                channels=args.n_hidden,
+                num_nodes=args.num_nodes,
+                input_len=args.input_len,
+                output_len=args.output_len,
+                dropout=args.dropout,
+            )
+            return model.to(device)
+        if args.model == "GATGPT":
+            from model_GATGPT import GATGPT
+
+            model = GATGPT(
+                device=device,
+                adj_mx=adj_mx,
+                input_dim=args.input_dim,
+                channels=args.n_hidden,
+                num_nodes=args.num_nodes,
+                input_len=args.input_len,
+                output_len=args.output_len,
+                dropout=args.dropout,
+            )
+            return model.to(device)
+
         from model_ST_LLM_plus import DynamicTransmissionSTLLM, EpiSTLLMPlus, EpiSTLLMPlusV2b, ST_LLM
 
         if args.model == "st_llm_plus":
@@ -439,7 +470,7 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
 
 
 class Trainer:
-    llm_family = {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b"}
+    llm_family = {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b", "GCNGPT", "GATGPT"}
     raw_output_models = {"SIR"}
 
     def __init__(self, args, scaler, adj_mx, device, semantic_adj_mx=None):
@@ -461,7 +492,7 @@ class Trainer:
 
         optimizer_name = args.optimizer
         if optimizer_name is None:
-            optimizer_name = "ranger" if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus"} else "adam"
+            optimizer_name = "ranger" if args.model in {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "GCNGPT", "GATGPT"} else "adam"
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         if not trainable_params:
             self.optimizer = None

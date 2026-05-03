@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch_geometric
 
-from transformers import GPT2Model, GPT2Tokenizer
-from torch_geometric.nn import GCNConv, GATConv
+from transformers import GPT2Model
+from torch_geometric.nn import GATConv
 
 class PFA(nn.Module):
     def __init__(self, device="cuda:0", gpt_layers=6, U=1):
@@ -53,12 +53,6 @@ class GATGPT(nn.Module):
         self.input_dim = input_dim
         self.output_len = output_len
         self.U = 2
-        
-        if num_nodes == 170 or num_nodes == 207 or num_nodes == 307:
-            time = 288
-        elif num_nodes == 250 or num_nodes == 266:
-            time = 48
-
 
         gpt_channel = 768
             
@@ -66,7 +60,10 @@ class GATGPT(nn.Module):
             self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1)
         )
 
-        self.gat = GATConv(in_channels = gpt_channel, out_channels = gpt_channel)        
+        self.gat = GATConv(in_channels=gpt_channel, out_channels=gpt_channel)
+        adj_tensor = torch.as_tensor(self.adj_mx, dtype=torch.float32)
+        edge_index, _ = torch_geometric.utils.dense_to_sparse(adj_tensor)
+        self.register_buffer("edge_index", edge_index, persistent=False)
 
         # regression
         self.regression_layer = nn.Conv2d(gpt_channel, self.output_len, kernel_size=(1, 1))
@@ -77,35 +74,26 @@ class GATGPT(nn.Module):
     def param_num(self):
         return sum([param.nelement() for param in self.parameters()])
 
-    def forward(self, history_data):
+    def forward(self, history_data, temporal_idx_x=None):
 
         data = history_data.permute(0, 3, 2, 1)
         B, T, S, F = data.shape
-        # print(data.shape) #[64, 12, 250, 3]
-        
+
         input_data = data.transpose(1, 2).contiguous()
         input_data = (input_data.view(B, S, -1).transpose(1, 2).unsqueeze(-1))
-        # print(input_data.shape) #[64, 36, 307, 1]
 
         data_st = self.start_conv(input_data)
-        # print(data_st.shape)#[64, 768, 307, 1]
 
         # Reshape data for GNN
-        data_flat = data_st.view(B*S, -1)  # Flatten for GNN input
-        # print(data_flat.shape) #[19648, 768]
+        data_flat = data_st.view(B * S, -1)
 
-        edge_index , edge_weight = torch_geometric.utils.dense_to_sparse(torch.tensor(self.adj_mx))
-        edge_index = edge_index.to(self.device)
-        
-        data_st = self.gat(data_flat, edge_index) + data_flat
-        data_st = data_st.view(B,S,-1)        
+        data_st = self.gat(data_flat, self.edge_index) + data_flat
+        data_st = data_st.view(B, S, -1)
         outputs = self.gpt(data_st)
             
         outputs = outputs.permute(0, 2, 1).unsqueeze(-1)
-        # print(outputs.shape) #[64, 768, 250, 1]       
 
         # regression
         outputs = self.regression_layer(outputs)  
-        # print(outputs.shape) #[64, 12, 250, 1]
 
         return outputs
