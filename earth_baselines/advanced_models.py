@@ -166,6 +166,93 @@ class EpiGNNLite(nn.Module):
         return pred, None
 
 
+class CausalGNN(nn.Module):
+    """CausalGNN-style baseline with directed adaptive dependency learning.
+
+    This is a compact reimplementation for this project's data interface. It
+    learns a sample-specific directed graph from temporal node embeddings,
+    sparsifies the candidate causal parents with top-k selection, and fuses that
+    graph with the static geographic graph before graph message passing.
+    """
+
+    def __init__(self, args, data):
+        super().__init__()
+        self.num_nodes = data.m
+        self.input_len = args.window
+        self.horizon = args.horizon
+        self.hidden_dim = args.n_hidden
+        self.top_k = int(getattr(args, "causal_top_k", 8))
+        self.num_layers = max(1, int(getattr(args, "causal_gnn_layers", 2)))
+        self.register_buffer("static_adj", _dense_row_normalized_adj(data.orig_adj), persistent=False)
+
+        rnn_layers = max(1, int(getattr(args, "n_layer", 1)))
+        self.temporal_encoder = nn.GRU(
+            input_size=1,
+            hidden_size=self.hidden_dim,
+            num_layers=rnn_layers,
+            dropout=args.dropout if rnn_layers > 1 else 0.0,
+            batch_first=True,
+        )
+        self.effect_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.cause_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.causal_bias = nn.Parameter(torch.zeros(self.num_nodes, self.num_nodes))
+        self.static_gate_logit = nn.Parameter(
+            torch.tensor(float(getattr(args, "causal_graph_alpha_init", 0.0)))
+        )
+        self.dropout = nn.Dropout(args.dropout)
+        self.message_layers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(args.dropout),
+                    nn.Linear(self.hidden_dim, self.hidden_dim),
+                )
+                for _ in range(self.num_layers)
+            ]
+        )
+        self.norms = nn.ModuleList([nn.LayerNorm(self.hidden_dim) for _ in range(self.num_layers)])
+        self.out = nn.Linear(self.hidden_dim, self.horizon)
+
+    def _directed_causal_adj(self, h):
+        effect = self.effect_proj(h)
+        cause = self.cause_proj(h)
+        scores = torch.bmm(effect, cause.transpose(1, 2)) / math.sqrt(self.hidden_dim)
+        scores = scores + self.causal_bias.to(h.device, h.dtype).unsqueeze(0)
+
+        if self.num_nodes > 1:
+            eye = torch.eye(self.num_nodes, device=h.device, dtype=torch.bool).unsqueeze(0)
+            scores = scores.masked_fill(eye, -1e4)
+
+        top_k = min(max(self.top_k, 0), self.num_nodes - 1 if self.num_nodes > 1 else 1)
+        if 0 < top_k < self.num_nodes:
+            top_values, top_indices = torch.topk(scores, k=top_k, dim=-1)
+            sparse_scores = torch.full_like(scores, -1e4)
+            scores = sparse_scores.scatter(-1, top_indices, top_values)
+
+        return torch.softmax(scores, dim=-1)
+
+    def forward(self, x):
+        batch_size, _, num_nodes = x.shape
+        node_series = x.permute(0, 2, 1).contiguous().view(batch_size * num_nodes, -1, 1)
+        _, h = self.temporal_encoder(node_series)
+        h = h[-1].view(batch_size, num_nodes, self.hidden_dim)
+
+        causal_adj = self._directed_causal_adj(h)
+        static_adj = self.static_adj.to(x.device, x.dtype).unsqueeze(0).expand(batch_size, -1, -1)
+        static_gate = torch.sigmoid(self.static_gate_logit).to(x.device, x.dtype)
+        fused_adj = static_gate * static_adj + (1.0 - static_gate) * causal_adj
+        fused_adj = fused_adj / fused_adj.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+
+        for layer, norm in zip(self.message_layers, self.norms):
+            context = torch.bmm(fused_adj, h)
+            update = layer(torch.cat([h, context], dim=-1))
+            h = norm(h + self.dropout(update))
+
+        pred = self.out(h).permute(0, 2, 1).contiguous()
+        return pred, None
+
+
 class SIRBaseline(nn.Module):
     """Trainable SIR-inspired baseline that outputs original-scale predictions."""
 
@@ -207,6 +294,60 @@ class SIRBaseline(nn.Module):
 
         sir_pred = torch.stack(preds, dim=1)
         return torch.clamp_min(sir_pred + trend_res, 0.0), None
+
+
+class SEIRBaseline(nn.Module):
+    """Trainable SEIR-inspired baseline that outputs original-scale predictions."""
+
+    def __init__(self, args, data):
+        super().__init__()
+        self.num_nodes = data.m
+        self.horizon = args.horizon
+        self.register_buffer("adj", _dense_row_normalized_adj(data.orig_adj), persistent=False)
+        self.register_buffer("scaler_mean", torch.tensor(float(getattr(args, "scaler_mean", 0.0))))
+        self.register_buffer("scaler_std", torch.tensor(float(getattr(args, "scaler_std", 1.0))))
+        self.beta_logit = nn.Parameter(torch.zeros(self.num_nodes))
+        self.sigma_logit = nn.Parameter(torch.full((self.num_nodes,), -0.5))
+        self.gamma_logit = nn.Parameter(torch.full((self.num_nodes,), -1.0))
+        self.capacity_log = nn.Parameter(torch.zeros(self.num_nodes))
+        self.exposed_log = nn.Parameter(torch.full((self.num_nodes,), -1.0))
+        self.report_log = nn.Parameter(torch.zeros(self.num_nodes))
+        self.trend = nn.Linear(2, self.horizon)
+
+    def forward(self, x):
+        x_raw = torch.clamp_min(x * self.scaler_std.to(x.device) + self.scaler_mean.to(x.device), 0.0)
+        recent_window = min(4, x_raw.size(1))
+        i_prev = x_raw[:, -1, :]
+        recent_mean = x_raw[:, -recent_window:, :].mean(dim=1)
+        recent_slope = x_raw[:, -1, :] - x_raw[:, -recent_window, :]
+        trend_res = self.trend(torch.stack([recent_mean, recent_slope], dim=-1)).permute(0, 2, 1)
+
+        beta = torch.sigmoid(self.beta_logit).view(1, -1)
+        sigma = torch.sigmoid(self.sigma_logit).view(1, -1)
+        gamma = torch.sigmoid(self.gamma_logit).view(1, -1)
+        report = F.softplus(self.report_log).view(1, -1)
+        exposed = F.softplus(self.exposed_log).view(1, -1) * recent_mean
+        capacity = F.softplus(self.capacity_log).view(1, -1) * (x_raw.amax(dim=1) + recent_mean + 1.0)
+        capacity = capacity + exposed + i_prev + 1.0
+        susceptible = capacity
+        adj = self.adj.to(x.device, x.dtype)
+
+        preds = []
+        for _ in range(self.horizon):
+            neighbor_i = torch.einsum("nm,bm->bn", adj, i_prev)
+            new_exposed = torch.minimum(
+                beta * susceptible * neighbor_i / capacity.clamp_min(1e-6),
+                susceptible,
+            )
+            new_infected = torch.minimum(sigma * exposed, exposed)
+            rec = torch.minimum(gamma * i_prev, i_prev + new_infected)
+            susceptible = torch.clamp_min(susceptible - new_exposed, 0.0)
+            exposed = torch.clamp_min(exposed + new_exposed - new_infected, 0.0)
+            i_prev = torch.clamp_min(i_prev + new_infected - rec, 0.0)
+            preds.append(report * new_infected + 0.2 * i_prev)
+
+        seir_pred = torch.stack(preds, dim=1)
+        return torch.clamp_min(seir_pred + trend_res, 0.0), None
 
 
 class PatchTST(nn.Module):

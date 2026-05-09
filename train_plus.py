@@ -57,10 +57,12 @@ def build_parser():
             "Persistence",
             "GRU",
             "LSTM",
+            "CausalGNN",
             "DCRNN",
             "EpiGNN",
             "EpiGNNLite",
             "SIR",
+            "SEIR",
             "PatchTST",
             "cola_gnn",
             "STGCN",
@@ -101,6 +103,14 @@ def build_parser():
     )
     parser.add_argument("--bi", action="store_true", help="use bidirectional RNN in cola_gnn")
     parser.add_argument("--k", type=int, default=10, help="cola_gnn convolution channels")
+    parser.add_argument("--causal_top_k", type=int, default=8, help="top-k directed parents for CausalGNN")
+    parser.add_argument("--causal_gnn_layers", type=int, default=2, help="CausalGNN message-passing layers")
+    parser.add_argument(
+        "--causal_graph_alpha_init",
+        type=float,
+        default=0.0,
+        help="initial logit for static-vs-causal graph fusion in CausalGNN",
+    )
     parser.add_argument("--epignn_k", type=int, default=8, help="EpiGNN multi-scale convolution kernels")
     parser.add_argument("--epignn_hidA", type=int, default=64, help="EpiGNN global transmission attention hidden size")
     parser.add_argument("--epignn_hidP", type=int, default=1, help="EpiGNN adaptive pooling height")
@@ -413,6 +423,7 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
 
     from earth_baselines import (
         AR,
+        CausalGNN,
         DCRNNModel,
         EpiGNNLite,
         EpiGNNModel,
@@ -420,6 +431,7 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
         LSTMBaseline,
         PatchTST,
         Persistence,
+        SEIRBaseline,
         SIRBaseline,
         STGCN,
         VAR,
@@ -443,6 +455,8 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
         model = GRUBaseline(args, baseline_data)
     elif args.model == "LSTM":
         model = LSTMBaseline(args, baseline_data)
+    elif args.model == "CausalGNN":
+        model = CausalGNN(args, baseline_data)
     elif args.model == "DCRNN":
         model = DCRNNModel(args, baseline_data)
     elif args.model == "EpiGNN":
@@ -451,6 +465,8 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
         model = EpiGNNLite(args, baseline_data)
     elif args.model == "SIR":
         model = SIRBaseline(args, baseline_data)
+    elif args.model == "SEIR":
+        model = SEIRBaseline(args, baseline_data)
     elif args.model == "PatchTST":
         model = PatchTST(args, baseline_data)
     elif args.model == "cola_gnn":
@@ -471,7 +487,8 @@ def build_model(args, device, adj_mx, semantic_adj_mx=None):
 
 class Trainer:
     llm_family = {"st_llm_plus", "dt_st_llm_plus", "epi_st_llm_plus", "epi_st_llm_plus_v2b", "GCNGPT", "GATGPT"}
-    raw_output_models = {"SIR"}
+    raw_output_models = {"SIR", "SEIR"}
+    direct_llm_call_models = {"st_llm_plus", "dt_st_llm_plus", "GCNGPT", "GATGPT"}
 
     def __init__(self, args, scaler, adj_mx, device, semantic_adj_mx=None):
         self.args = args
@@ -632,7 +649,7 @@ class Trainer:
             model_output = None
             output = (
                 self.model(model_x, model_temporal)
-                if self.args.model in {"st_llm_plus", "dt_st_llm_plus"}
+                if self.args.model in self.direct_llm_call_models
                 else self.model(model_x)[0]
             )
             output = self._format_output(output)
@@ -682,7 +699,7 @@ class Trainer:
             else:
                 output = (
                     self.model(model_x, model_temporal)
-                    if self.args.model in {"st_llm_plus", "dt_st_llm_plus"}
+                    if self.args.model in self.direct_llm_call_models
                     else self.model(model_x)[0]
                 )
             return self._format_output(output)

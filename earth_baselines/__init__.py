@@ -1,6 +1,15 @@
 from .DCRNN import DCRNNModel
 from .EpiGNN import EpiGNNModel
-from .advanced_models import EpiGNNLite, GRUBaseline, LSTMBaseline, PatchTST, Persistence, SIRBaseline
+from .advanced_models import (
+    CausalGNN,
+    EpiGNNLite,
+    GRUBaseline,
+    LSTMBaseline,
+    PatchTST,
+    Persistence,
+    SEIRBaseline,
+    SIRBaseline,
+)
 from .models import AR, STGCN, VAR, cola_gnn
 
 __all__ = [
@@ -8,6 +17,7 @@ __all__ = [
     "VAR",
     "cola_gnn",
     "STGCN",
+    "CausalGNN",
     "Persistence",
     "GRUBaseline",
     "LSTMBaseline",
@@ -15,5 +25,6 @@ __all__ = [
     "EpiGNNModel",
     "EpiGNNLite",
     "SIRBaseline",
+    "SEIRBaseline",
     "PatchTST",
 ]
