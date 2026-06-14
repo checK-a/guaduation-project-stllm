@@ -1323,10 +1323,10 @@ def gpu_memory_stats_mb(device):
             "final_gpu_reserved_mb": np.nan,
         }
     return {
-        "peak_gpu_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024**2),
-        "peak_gpu_reserved_mb": torch.cuda.max_memory_reserved(device) / (1024**2),
-        "final_gpu_allocated_mb": torch.cuda.memory_allocated(device) / (1024**2),
-        "final_gpu_reserved_mb": torch.cuda.memory_reserved(device) / (1024**2),
+        "peak_gpu_allocated_mb": torch.cuda.max_memory_allocated(device.index) / (1024**2),
+        "peak_gpu_reserved_mb": torch.cuda.max_memory_reserved(device.index) / (1024**2),
+        "final_gpu_allocated_mb": torch.cuda.memory_allocated(device.index) / (1024**2),
+        "final_gpu_reserved_mb": torch.cuda.memory_reserved(device.index) / (1024**2),
     }
 
 
@@ -1444,7 +1444,7 @@ def main():
         raise RuntimeError("CUDA was requested but is unavailable. Use --device cpu to run on CPU.")
     args.cuda = device.type == "cuda"
     if args.profile_resources and device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.reset_peak_memory_stats(device.index)
     dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
     scaler = dataloader["scaler"]
 
