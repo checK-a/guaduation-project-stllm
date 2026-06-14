@@ -1034,78 +1034,98 @@ def conformal_quantile(residuals, alpha):
     return float(np.partition(residuals, q_rank - 1)[q_rank - 1])
 
 
-def compute_conformal_intervals(val_pred, val_real, val_mask, test_pred, test_real, test_mask, coverages):
+def compute_conformal_intervals(val_pred, val_real, val_mask, test_pred, test_real, test_mask, coverages, methods=("absolute", "normalized"), norm_eps=1.0):
     rows = []
     horizon_count = test_pred.shape[-1]
-    for coverage in coverages:
-        alpha = 1.0 - coverage
-        for horizon_idx in range(horizon_count):
-            val_valid = val_mask[:, :, horizon_idx]
-            test_valid = test_mask[:, :, horizon_idx]
+    for method in methods:
+        for coverage in coverages:
+            alpha = 1.0 - coverage
+            for horizon_idx in range(horizon_count):
+                val_valid = val_mask[:, :, horizon_idx]
+                test_valid = test_mask[:, :, horizon_idx]
 
-            residuals = np.abs(
-                val_real[:, :, horizon_idx][val_valid]
-                - val_pred[:, :, horizon_idx][val_valid]
-            )
-            qhat = conformal_quantile(residuals, alpha)
-            if not np.isfinite(qhat):
+                val_pred_h = val_pred[:, :, horizon_idx][val_valid]
+                val_real_h = val_real[:, :, horizon_idx][val_valid]
+                abs_res = np.abs(val_real_h - val_pred_h)
+                if method == "normalized":
+                    # scale residuals by predicted magnitude so interval width adapts
+                    # to the local scale; calibrate quantile on relative residuals.
+                    val_scale = np.abs(val_pred_h) + norm_eps
+                    residuals = abs_res / val_scale
+                else:
+                    residuals = abs_res
+                qhat = conformal_quantile(residuals, alpha)
+                if not np.isfinite(qhat):
+                    rows.append(
+                        {
+                            "method": method,
+                            "coverage_target": coverage,
+                            "horizon": horizon_idx + 1,
+                            "qhat": np.nan,
+                            "empirical_coverage": np.nan,
+                            "mpiw": np.nan,
+                            "winkler": np.nan,
+                            "n_calibration": int(residuals.size),
+                            "n_test": int(test_valid.sum()),
+                        }
+                    )
+                    continue
+
+                pred_h = test_pred[:, :, horizon_idx]
+                real_h = test_real[:, :, horizon_idx]
+                if method == "normalized":
+                    half_width = qhat * (np.abs(pred_h) + norm_eps)
+                else:
+                    half_width = qhat
+                lower = np.maximum(pred_h - half_width, 0.0)
+                upper = pred_h + half_width
+
+                valid_lower = lower[test_valid]
+                valid_upper = upper[test_valid]
+                valid_real = real_h[test_valid]
+                inside = (valid_real >= valid_lower) & (valid_real <= valid_upper)
+                width = valid_upper - valid_lower
+                below = valid_real < valid_lower
+                above = valid_real > valid_upper
+                winkler = width.copy()
+                winkler[below] += (2.0 / alpha) * (valid_lower[below] - valid_real[below])
+                winkler[above] += (2.0 / alpha) * (valid_real[above] - valid_upper[above])
+
                 rows.append(
                     {
+                        "method": method,
                         "coverage_target": coverage,
                         "horizon": horizon_idx + 1,
-                        "qhat": np.nan,
-                        "empirical_coverage": np.nan,
-                        "mpiw": np.nan,
-                        "winkler": np.nan,
+                        "qhat": qhat,
+                        "empirical_coverage": float(np.mean(inside)) if inside.size else np.nan,
+                        "mpiw": float(np.mean(width)) if width.size else np.nan,
+                        "winkler": float(np.mean(winkler)) if winkler.size else np.nan,
                         "n_calibration": int(residuals.size),
                         "n_test": int(test_valid.sum()),
                     }
                 )
-                continue
 
-            pred_h = test_pred[:, :, horizon_idx]
-            real_h = test_real[:, :, horizon_idx]
-            lower = np.maximum(pred_h - qhat, 0.0)
-            upper = pred_h + qhat
-
-            valid_lower = lower[test_valid]
-            valid_upper = upper[test_valid]
-            valid_real = real_h[test_valid]
-            inside = (valid_real >= valid_lower) & (valid_real <= valid_upper)
-            width = valid_upper - valid_lower
-            below = valid_real < valid_lower
-            above = valid_real > valid_upper
-            winkler = width.copy()
-            winkler[below] += (2.0 / alpha) * (valid_lower[below] - valid_real[below])
-            winkler[above] += (2.0 / alpha) * (valid_real[above] - valid_upper[above])
-
+            horizon_rows = [
+                row
+                for row in rows
+                if row["method"] == method
+                and row["coverage_target"] == coverage
+                and isinstance(row["horizon"], int)
+            ]
+            valid_rows = [row for row in horizon_rows if np.isfinite(row["empirical_coverage"])]
             rows.append(
                 {
+                    "method": method,
                     "coverage_target": coverage,
-                    "horizon": horizon_idx + 1,
-                    "qhat": qhat,
-                    "empirical_coverage": float(np.mean(inside)) if inside.size else np.nan,
-                    "mpiw": float(np.mean(width)) if width.size else np.nan,
-                    "winkler": float(np.mean(winkler)) if winkler.size else np.nan,
-                    "n_calibration": int(residuals.size),
-                    "n_test": int(test_valid.sum()),
+                    "horizon": "avg",
+                    "qhat": float(np.nanmean([row["qhat"] for row in valid_rows])) if valid_rows else np.nan,
+                    "empirical_coverage": float(np.nanmean([row["empirical_coverage"] for row in valid_rows])) if valid_rows else np.nan,
+                    "mpiw": float(np.nanmean([row["mpiw"] for row in valid_rows])) if valid_rows else np.nan,
+                    "winkler": float(np.nanmean([row["winkler"] for row in valid_rows])) if valid_rows else np.nan,
+                    "n_calibration": int(np.sum([row["n_calibration"] for row in valid_rows])),
+                    "n_test": int(np.sum([row["n_test"] for row in valid_rows])),
                 }
             )
-
-        horizon_rows = [row for row in rows if row["coverage_target"] == coverage and isinstance(row["horizon"], int)]
-        valid_rows = [row for row in horizon_rows if np.isfinite(row["empirical_coverage"])]
-        rows.append(
-            {
-                "coverage_target": coverage,
-                "horizon": "avg",
-                "qhat": float(np.nanmean([row["qhat"] for row in valid_rows])) if valid_rows else np.nan,
-                "empirical_coverage": float(np.nanmean([row["empirical_coverage"] for row in valid_rows])) if valid_rows else np.nan,
-                "mpiw": float(np.nanmean([row["mpiw"] for row in valid_rows])) if valid_rows else np.nan,
-                "winkler": float(np.nanmean([row["winkler"] for row in valid_rows])) if valid_rows else np.nan,
-                "n_calibration": int(np.sum([row["n_calibration"] for row in valid_rows])),
-                "n_test": int(np.sum([row["n_test"] for row in valid_rows])),
-            }
-        )
     return rows
 
 
@@ -1145,7 +1165,8 @@ def evaluate_conformal_intervals(engine, dataloader, scaler, device, coverages, 
     print(f"Conformal interval results written to {output_path}")
     for row in rows:
         print(
-            "Conformal coverage {:.2f}, horizon {}, qhat: {:.4f}, PICP: {:.4f}, MPIW: {:.4f}, Winkler: {:.4f}, n_cal/n_test: {}/{}".format(
+            "Conformal [{}] coverage {:.2f}, horizon {}, qhat: {:.4f}, PICP: {:.4f}, MPIW: {:.4f}, Winkler: {:.4f}, n_cal/n_test: {}/{}".format(
+                row.get("method", "absolute"),
                 row["coverage_target"],
                 row["horizon"],
                 row["qhat"],
