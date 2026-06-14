@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch_geometric
@@ -8,8 +10,9 @@ from torch_geometric.nn import GATConv
 class PFA(nn.Module):
     def __init__(self, device="cuda:0", gpt_layers=6, U=1):
         super(PFA, self).__init__()
+        gpt2_path = "/root/gpt2_weights" if os.path.exists("/root/gpt2_weights") else "gpt2"
         self.gpt2 = GPT2Model.from_pretrained(
-            "gpt2", output_attentions=True, output_hidden_states=True
+            gpt2_path, output_attentions=True, output_hidden_states=True
         )
         self.gpt2.h = self.gpt2.h[:gpt_layers]
         self.U = U
