@@ -1,0 +1,22 @@
+{
+  "source_name": "CDC NHSN Weekly Hospital Respiratory Data",
+  "source_kind": "github",
+  "source_release": "final",
+  "source_url": "https://raw.githubusercontent.com/cdcepi/FluSight-forecast-hub/refs/heads/main/target-data/target-hospital-admissions.csv",
+  "source_page_url": "https://raw.githubusercontent.com/d/target-hospital-admissions",
+  "request_url": "https://raw.githubusercontent.com/cdcepi/FluSight-forecast-hub/refs/heads/main/target-data/target-hospital-admissions.csv",
+  "fetch_timestamp_utc": "2026-04-25T04:12:47.287470+00:00",
+  "raw_filename": "target-hospital-admissions.csv",
+  "selected_columns": [
+    "jurisdiction",
+    "weekendingdate",
+    "totalconfflunewadm"
+  ],
+  "selected_metric_definition": "For source=nhsn: totalconfflunewadm = weekly total confirmed influenza new hospital admissions. For source=github: value = FluSight target weekly incident influenza hospital admissions.",
+  "date_filter": {
+    "start_date": null,
+    "end_date": null
+  },
+  "jurisdictions_filter": null,
+  "row_count": 11660
+}

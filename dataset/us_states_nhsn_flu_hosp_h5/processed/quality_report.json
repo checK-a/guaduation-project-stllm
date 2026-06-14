@@ -1,0 +1,424 @@
+{
+  "num_states": 51,
+  "num_weeks": 220,
+  "start_epiweek": "2022W05",
+  "end_epiweek": "2026W16",
+  "start_week_end_date": "2022-02-05",
+  "end_week_end_date": "2026-04-18",
+  "adjacency_shape": [
+    51,
+    51
+  ],
+  "adjacency_symmetric": true,
+  "adjacency_diagonal_all_ones": true,
+  "per_state": [
+    {
+      "state_name": "Alabama",
+      "state_code": "al",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 734.0,
+      "mean_value": 89.90908813476562
+    },
+    {
+      "state_name": "Alaska",
+      "state_code": "ak",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 86.0,
+      "mean_value": 10.663636207580566
+    },
+    {
+      "state_name": "Arizona",
+      "state_code": "az",
+      "num_weeks": 220,
+      "min_value": 4.0,
+      "max_value": 2846.0,
+      "mean_value": 196.83636474609375
+    },
+    {
+      "state_name": "Arkansas",
+      "state_code": "ar",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 752.0,
+      "mean_value": 71.9272689819336
+    },
+    {
+      "state_name": "California",
+      "state_code": "ca",
+      "num_weeks": 220,
+      "min_value": 11.0,
+      "max_value": 4599.0,
+      "mean_value": 501.3908996582031
+    },
+    {
+      "state_name": "Colorado",
+      "state_code": "co",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 830.0,
+      "mean_value": 91.99545288085938
+    },
+    {
+      "state_name": "Connecticut",
+      "state_code": "ct",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 778.0,
+      "mean_value": 66.0727310180664
+    },
+    {
+      "state_name": "Delaware",
+      "state_code": "de",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 231.0,
+      "mean_value": 20.195453643798828
+    },
+    {
+      "state_name": "District of Columbia",
+      "state_code": "dc",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 259.0,
+      "mean_value": 15.222726821899414
+    },
+    {
+      "state_name": "Florida",
+      "state_code": "fl",
+      "num_weeks": 220,
+      "min_value": 17.0,
+      "max_value": 3787.0,
+      "mean_value": 513.2318115234375
+    },
+    {
+      "state_name": "Georgia",
+      "state_code": "ga",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1399.0,
+      "mean_value": 155.7681884765625
+    },
+    {
+      "state_name": "Hawaii",
+      "state_code": "hi",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 125.0,
+      "mean_value": 15.71363639831543
+    },
+    {
+      "state_name": "Idaho",
+      "state_code": "id",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 333.0,
+      "mean_value": 36.37272644042969
+    },
+    {
+      "state_name": "Illinois",
+      "state_code": "il",
+      "num_weeks": 220,
+      "min_value": 1.0,
+      "max_value": 2369.0,
+      "mean_value": 217.9499969482422
+    },
+    {
+      "state_name": "Indiana",
+      "state_code": "in",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1717.0,
+      "mean_value": 162.0
+    },
+    {
+      "state_name": "Iowa",
+      "state_code": "ia",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 607.0,
+      "mean_value": 55.48636245727539
+    },
+    {
+      "state_name": "Kansas",
+      "state_code": "ks",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 519.0,
+      "mean_value": 50.96818161010742
+    },
+    {
+      "state_name": "Kentucky",
+      "state_code": "ky",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1203.0,
+      "mean_value": 110.4227294921875
+    },
+    {
+      "state_name": "Louisiana",
+      "state_code": "la",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 713.0,
+      "mean_value": 103.94091033935547
+    },
+    {
+      "state_name": "Maine",
+      "state_code": "me",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 267.0,
+      "mean_value": 26.736364364624023
+    },
+    {
+      "state_name": "Maryland",
+      "state_code": "md",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1086.0,
+      "mean_value": 88.7727279663086
+    },
+    {
+      "state_name": "Massachusetts",
+      "state_code": "ma",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1637.0,
+      "mean_value": 152.93637084960938
+    },
+    {
+      "state_name": "Michigan",
+      "state_code": "mi",
+      "num_weeks": 220,
+      "min_value": 1.0,
+      "max_value": 1805.0,
+      "mean_value": 208.3727264404297
+    },
+    {
+      "state_name": "Minnesota",
+      "state_code": "mn",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1063.0,
+      "mean_value": 93.25909423828125
+    },
+    {
+      "state_name": "Mississippi",
+      "state_code": "ms",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 589.0,
+      "mean_value": 63.672725677490234
+    },
+    {
+      "state_name": "Missouri",
+      "state_code": "mo",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1425.0,
+      "mean_value": 147.83636474609375
+    },
+    {
+      "state_name": "Montana",
+      "state_code": "mt",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 208.0,
+      "mean_value": 23.118181228637695
+    },
+    {
+      "state_name": "Nebraska",
+      "state_code": "ne",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 319.0,
+      "mean_value": 34.609092712402344
+    },
+    {
+      "state_name": "Nevada",
+      "state_code": "nv",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 478.0,
+      "mean_value": 50.0
+    },
+    {
+      "state_name": "New Hampshire",
+      "state_code": "nh",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 290.0,
+      "mean_value": 23.5
+    },
+    {
+      "state_name": "New Jersey",
+      "state_code": "nj",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1888.0,
+      "mean_value": 191.51364135742188
+    },
+    {
+      "state_name": "New Mexico",
+      "state_code": "nm",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 409.0,
+      "mean_value": 53.745452880859375
+    },
+    {
+      "state_name": "New York",
+      "state_code": "ny",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 3866.0,
+      "mean_value": 391.0727233886719
+    },
+    {
+      "state_name": "North Carolina",
+      "state_code": "nc",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 2461.0,
+      "mean_value": 188.99090576171875
+    },
+    {
+      "state_name": "North Dakota",
+      "state_code": "nd",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 159.0,
+      "mean_value": 14.895454406738281
+    },
+    {
+      "state_name": "Ohio",
+      "state_code": "oh",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 3705.0,
+      "mean_value": 267.91363525390625
+    },
+    {
+      "state_name": "Oklahoma",
+      "state_code": "ok",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1114.0,
+      "mean_value": 99.74090576171875
+    },
+    {
+      "state_name": "Oregon",
+      "state_code": "or",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 686.0,
+      "mean_value": 71.60909271240234
+    },
+    {
+      "state_name": "Pennsylvania",
+      "state_code": "pa",
+      "num_weeks": 220,
+      "min_value": 6.0,
+      "max_value": 4569.0,
+      "mean_value": 422.654541015625
+    },
+    {
+      "state_name": "Rhode Island",
+      "state_code": "ri",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 285.0,
+      "mean_value": 17.872726440429688
+    },
+    {
+      "state_name": "South Carolina",
+      "state_code": "sc",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1287.0,
+      "mean_value": 101.04545593261719
+    },
+    {
+      "state_name": "South Dakota",
+      "state_code": "sd",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 207.0,
+      "mean_value": 17.46363639831543
+    },
+    {
+      "state_name": "Tennessee",
+      "state_code": "tn",
+      "num_weeks": 220,
+      "min_value": 2.0,
+      "max_value": 1067.0,
+      "mean_value": 128.6727294921875
+    },
+    {
+      "state_name": "Texas",
+      "state_code": "tx",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 4729.0,
+      "mean_value": 527.5681762695312
+    },
+    {
+      "state_name": "Utah",
+      "state_code": "ut",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 388.0,
+      "mean_value": 28.090909957885742
+    },
+    {
+      "state_name": "Vermont",
+      "state_code": "vt",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 134.0,
+      "mean_value": 10.004545211791992
+    },
+    {
+      "state_name": "Virginia",
+      "state_code": "va",
+      "num_weeks": 220,
+      "min_value": 4.0,
+      "max_value": 1315.0,
+      "mean_value": 136.595458984375
+    },
+    {
+      "state_name": "Washington",
+      "state_code": "wa",
+      "num_weeks": 220,
+      "min_value": 1.0,
+      "max_value": 747.0,
+      "mean_value": 89.45909118652344
+    },
+    {
+      "state_name": "West Virginia",
+      "state_code": "wv",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 640.0,
+      "mean_value": 54.01363754272461
+    },
+    {
+      "state_name": "Wisconsin",
+      "state_code": "wi",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 1153.0,
+      "mean_value": 106.39090728759766
+    },
+    {
+      "state_name": "Wyoming",
+      "state_code": "wy",
+      "num_weeks": 220,
+      "min_value": 0.0,
+      "max_value": 116.0,
+      "mean_value": 13.122727394104004
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "border": {
+    "path": "dataset\\ili_us_states_h4_leakfree\\ili_us_states_h4_leakfree\\graph_variants\\adj_border.pkl",
+    "shape": [
+      51,
+      51
+    ],
+    "symmetric": true,
+    "diag_all_one": true,
+    "finite": true,
+    "undirected_edges": 109,
+    "density_excluding_self": 0.08549019607843138,
+    "min": 0.0,
+    "max": 1.0
+  },
+  "identity": {
+    "path": "dataset\\ili_us_states_h4_leakfree\\ili_us_states_h4_leakfree\\graph_variants\\adj_identity.pkl",
+    "shape": [
+      51,
+      51
+    ],
+    "symmetric": true,
+    "diag_all_one": true,
+    "finite": true,
+    "undirected_edges": 0,
+    "density_excluding_self": 0.0,
+    "min": 0.0,
+    "max": 1.0
+  },
+  "distance_knn_k4": {
+    "path": "dataset\\ili_us_states_h4_leakfree\\ili_us_states_h4_leakfree\\graph_variants\\adj_distance_knn_k4.pkl",
+    "shape": [
+      51,
+      51
+    ],
+    "symmetric": true,
+    "diag_all_one": true,
+    "finite": true,
+    "undirected_edges": 125,
+    "density_excluding_self": 0.09803921568627451,
+    "min": 0.0,
+    "max": 1.0
+  },
+  "correlation_topk_k4": {
+    "path": "dataset\\ili_us_states_h4_leakfree\\ili_us_states_h4_leakfree\\graph_variants\\adj_correlation_topk_k4.pkl",
+    "shape": [
+      51,
+      51
+    ],
+    "symmetric": true,
+    "diag_all_one": true,
+    "finite": true,
+    "undirected_edges": 168,
+    "density_excluding_self": 0.13176470588235295,
+    "min": 0.0,
+    "max": 1.0
+  },
+  "gravity_topk_k4": {
+    "path": "dataset\\ili_us_states_h4_leakfree\\ili_us_states_h4_leakfree\\graph_variants\\adj_gravity_topk_k4.pkl",
+    "shape": [
+      51,
+      51
+    ],
+    "symmetric": true,
+    "diag_all_one": true,
+    "finite": true,
+    "undirected_edges": 153,
+    "density_excluding_self": 0.12,
+    "min": 0.0,
+    "max": 1.0
+  }
+}
