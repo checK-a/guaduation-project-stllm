@@ -236,17 +236,53 @@ def load_and_clean_ili(ili_csv_path, state_order, start_epiweek, end_epiweek):
     panel_index = panel_index.drop(columns="_key")
 
     panel = panel_index.merge(ili_df, on=["state_name", "year", "week"], how="left")
-    panel["is_imputed"] = panel["weighted_ili"].isna().astype(np.int8)
-    panel["weighted_ili"] = (
-        panel.groupby("state_name", group_keys=False)["weighted_ili"]
-        .apply(lambda series: series.interpolate(method="linear", limit_direction="both"))
-        .astype(np.float32)
-    )
-    if panel["weighted_ili"].isna().any():
-        raise ValueError("ILI panel still contains NaNs after interpolation.")
+    panel["is_observed"] = panel["weighted_ili"].notna().astype(np.int8)
+    panel["is_imputed"] = (1 - panel["is_observed"]).astype(np.int8)
 
     panel = panel.sort_values(["epiweek_id", "state_id"]).reset_index(drop=True)
     return panel, global_weeks, state_index
+
+
+def causal_median_fill(value_matrix):
+    filled = value_matrix.astype(np.float32, copy=True)
+    observed_mask = ~np.isnan(value_matrix)
+    last_values = np.full(value_matrix.shape[1], np.nan, dtype=np.float32)
+    global_values = []
+    fill_sources = np.full(value_matrix.shape, "observed", dtype=object)
+
+    for t in range(value_matrix.shape[0]):
+        row = value_matrix[t]
+        observed = observed_mask[t]
+        current_values = row[observed]
+        if current_values.size:
+            current_median = float(np.median(current_values))
+            global_values.extend(current_values.astype(float).tolist())
+        else:
+            current_median = np.nan
+        global_median = float(np.median(global_values)) if global_values else np.nan
+
+        for n in range(value_matrix.shape[1]):
+            if observed[n]:
+                filled[t, n] = row[n]
+                fill_sources[t, n] = "observed"
+            elif not np.isnan(last_values[n]):
+                filled[t, n] = last_values[n]
+                fill_sources[t, n] = "forward_fill"
+            elif not np.isnan(current_median):
+                filled[t, n] = current_median
+                fill_sources[t, n] = "cross_sectional_median"
+            elif not np.isnan(global_median):
+                filled[t, n] = global_median
+                fill_sources[t, n] = "expanding_global_median"
+            else:
+                filled[t, n] = 0.0
+                fill_sources[t, n] = "zero_fallback"
+
+        last_values[observed] = row[observed]
+
+    if np.isnan(filled).any():
+        raise ValueError("Causal median imputation left NaNs in the value matrix.")
+    return filled.astype(np.float32), observed_mask.astype(bool), fill_sources
 
 
 def load_and_build_adjacency(adj_csv_path, state_order):
@@ -255,10 +291,10 @@ def load_and_build_adjacency(adj_csv_path, state_order):
         raise ValueError("Adjacency CSV must contain at least two columns.")
 
     state_a_col = detect_column(
-        edge_df, ["state", "state1", "source", "from", "region", "state_a"]
+        edge_df, ["state_name", "state", "state1", "source", "from", "region", "state_a"]
     )
     state_b_col = detect_column(
-        edge_df, ["neighbor", "state2", "target", "to", "border", "state_b"]
+        edge_df, ["neighbor_name", "neighbor", "state2", "target", "to", "border", "state_b"]
     )
     if state_a_col is None or state_b_col is None:
         state_a_col, state_b_col = edge_df.columns[:2]
@@ -286,25 +322,42 @@ def load_and_build_adjacency(adj_csv_path, state_order):
     return adj
 
 
-def build_feature_tensor(panel, global_weeks, state_order):
+def build_feature_tensor(panel, global_weeks, state_order, imputation_policy):
     num_weeks = len(global_weeks)
     num_states = len(state_order)
 
-    value_tensor = (
+    raw_value_tensor = (
         panel.pivot(index="epiweek_id", columns="state_id", values="weighted_ili")
         .reindex(index=np.arange(num_weeks), columns=np.arange(num_states))
         .to_numpy(dtype=np.float32)
     )
 
+    if imputation_policy == "interpolate":
+        value_tensor = (
+            pd.DataFrame(raw_value_tensor)
+            .interpolate(method="linear", limit_direction="both")
+            .to_numpy(dtype=np.float32)
+        )
+        observed_mask = ~np.isnan(raw_value_tensor)
+        fill_sources = np.where(observed_mask, "observed", "linear_interpolate")
+    elif imputation_policy == "causal_median":
+        value_tensor, observed_mask, fill_sources = causal_median_fill(raw_value_tensor)
+    else:
+        raise ValueError(f"Unsupported imputation_policy: {imputation_policy}")
+
     if np.isnan(value_tensor).any():
-        raise ValueError("Value tensor contains NaNs after panel pivot.")
+        raise ValueError("Value tensor contains NaNs after imputation.")
+
+    panel["weighted_ili_raw"] = panel["weighted_ili"].astype(np.float32)
+    panel["weighted_ili"] = value_tensor.reshape(-1).astype(np.float32)
+    panel["imputation_source"] = fill_sources.reshape(-1)
 
     features = value_tensor[:, :, None].astype(np.float32)
     week_indices = (global_weeks["week"].to_numpy(dtype=np.int32) - 1).clip(0, 52)
-    return features, value_tensor, week_indices
+    return features, value_tensor, observed_mask.astype(bool), week_indices
 
 
-def make_windows(features, values, week_indices, global_weeks, input_len, output_len):
+def make_windows(features, values, observed_mask, week_indices, global_weeks, input_len, output_len):
     num_weeks = features.shape[0]
     num_samples = num_weeks - input_len - output_len + 1
     if num_samples <= 0:
@@ -314,6 +367,8 @@ def make_windows(features, values, week_indices, global_weeks, input_len, output
 
     xs = []
     ys = []
+    x_masks = []
+    y_masks = []
     week_idx_xs = []
     week_idx_ys = []
     sample_ranges = []
@@ -324,6 +379,8 @@ def make_windows(features, values, week_indices, global_weeks, input_len, output
         target_end = input_end + output_len
         xs.append(features[start_idx:input_end])
         ys.append(values[input_end:target_end, :, None])
+        x_masks.append(observed_mask[start_idx:input_end, :, None])
+        y_masks.append(observed_mask[input_end:target_end, :, None])
         week_idx_xs.append(week_indices[start_idx:input_end])
         week_idx_ys.append(week_indices[input_end:target_end])
         sample_ranges.append(
@@ -339,13 +396,26 @@ def make_windows(features, values, week_indices, global_weeks, input_len, output
     return (
         np.stack(xs),
         np.stack(ys),
+        np.stack(x_masks).astype(bool),
+        np.stack(y_masks).astype(bool),
         np.stack(week_idx_xs).astype(np.int64),
         np.stack(week_idx_ys).astype(np.int64),
         sample_ranges,
     )
 
 
-def split_windows(xs, ys, week_idx_xs, week_idx_ys, sample_ranges, train_ratio, val_ratio, output_len):
+def split_windows(
+    xs,
+    ys,
+    x_masks,
+    y_masks,
+    week_idx_xs,
+    week_idx_ys,
+    sample_ranges,
+    train_ratio,
+    val_ratio,
+    output_len,
+):
     num_samples = xs.shape[0]
     gap = max(output_len - 1, 0)
     effective_samples = num_samples - 2 * gap
@@ -386,6 +456,8 @@ def split_windows(xs, ys, week_idx_xs, week_idx_ys, sample_ranges, train_ratio, 
         split_data[split_name] = {
             "x": xs[start:end],
             "y": ys[start:end],
+            "x_mask": x_masks[start:end],
+            "y_mask": y_masks[start:end],
             "week_idx_x": week_idx_xs[start:end],
             "week_idx_y": week_idx_ys[start:end],
             "sample_ranges": sample_ranges[start:end],
@@ -399,6 +471,8 @@ def save_npz_splits(output_dir, split_data):
             output_dir / f"{split_name}.npz",
             x=payload["x"],
             y=payload["y"],
+            x_mask=payload["x_mask"],
+            y_mask=payload["y_mask"],
             week_idx_x=payload["week_idx_x"],
             week_idx_y=payload["week_idx_y"],
         )
@@ -459,6 +533,13 @@ def main():
     parser.add_argument("--train_ratio", type=float, default=0.7, help="Training split ratio.")
     parser.add_argument("--val_ratio", type=float, default=0.1, help="Validation split ratio.")
     parser.add_argument(
+        "--imputation_policy",
+        type=str,
+        default="interpolate",
+        choices=["interpolate", "causal_median"],
+        help="How to fill missing state-week values. Use causal_median for leak-free packages.",
+    )
+    parser.add_argument(
         "--include_dc",
         type=parse_bool,
         default=True,
@@ -491,13 +572,17 @@ def main():
         end_epiweek=args.end_epiweek,
     )
     adj = load_and_build_adjacency(adj_csv_path, state_order)
-    features, values, week_indices = build_feature_tensor(panel, global_weeks, state_order)
-    xs, ys, week_idx_xs, week_idx_ys, sample_ranges = make_windows(
-        features, values, week_indices, global_weeks, args.input_len, args.output_len
+    features, values, observed_mask, week_indices = build_feature_tensor(
+        panel, global_weeks, state_order, args.imputation_policy
+    )
+    xs, ys, x_masks, y_masks, week_idx_xs, week_idx_ys, sample_ranges = make_windows(
+        features, values, observed_mask, week_indices, global_weeks, args.input_len, args.output_len
     )
     split_data = split_windows(
         xs,
         ys,
+        x_masks,
+        y_masks,
         week_idx_xs,
         week_idx_ys,
         sample_ranges,
@@ -528,6 +613,8 @@ def main():
         "output_len": args.output_len,
         "feature_names": ["weighted_ili"],
         "state_order": state_order,
+        "imputation_policy": args.imputation_policy,
+        "missing_value_count": int((~observed_mask).sum()),
         "train_ratio": args.train_ratio,
         "val_ratio": args.val_ratio,
         "test_ratio": 1.0 - args.train_ratio - args.val_ratio,

@@ -31,6 +31,8 @@ class DataLoader(object):
         batch_size,
         temporal_idx_xs=None,
         temporal_idx_ys=None,
+        x_masks=None,
+        y_masks=None,
         pad_with_last_sample=True,
     ):
         self.batch_size = batch_size
@@ -47,12 +49,20 @@ class DataLoader(object):
             if temporal_idx_ys is not None:
                 temporal_idx_y_padding = np.repeat(temporal_idx_ys[-1:], num_padding, axis=0)
                 temporal_idx_ys = np.concatenate([temporal_idx_ys, temporal_idx_y_padding], axis=0)
+            if x_masks is not None:
+                x_mask_padding = np.repeat(x_masks[-1:], num_padding, axis=0)
+                x_masks = np.concatenate([x_masks, x_mask_padding], axis=0)
+            if y_masks is not None:
+                y_mask_padding = np.repeat(y_masks[-1:], num_padding, axis=0)
+                y_masks = np.concatenate([y_masks, y_mask_padding], axis=0)
         self.size = len(xs)
         self.num_batch = int(self.size // self.batch_size)
         self.xs = xs
         self.ys = ys
         self.temporal_idx_xs = temporal_idx_xs
         self.temporal_idx_ys = temporal_idx_ys
+        self.x_masks = x_masks
+        self.y_masks = y_masks
 
     def shuffle(self):
         permutation = np.random.permutation(self.size)
@@ -63,6 +73,10 @@ class DataLoader(object):
             self.temporal_idx_xs = self.temporal_idx_xs[permutation]
         if self.temporal_idx_ys is not None:
             self.temporal_idx_ys = self.temporal_idx_ys[permutation]
+        if self.x_masks is not None:
+            self.x_masks = self.x_masks[permutation]
+        if self.y_masks is not None:
+            self.y_masks = self.y_masks[permutation]
 
     def get_iterator(self):
         self.current_ind = 0
@@ -80,6 +94,32 @@ class DataLoader(object):
                 if self.temporal_idx_ys is not None:
                     temporal_idx_y_i = self.temporal_idx_ys[start_ind:end_ind, ...]
                 yield (x_i, y_i, temporal_idx_x_i, temporal_idx_y_i)
+                self.current_ind += 1
+
+        return _wrapper()
+
+    def get_iterator_with_masks(self):
+        self.current_ind = 0
+
+        def _wrapper():
+            while self.current_ind < self.num_batch:
+                start_ind = self.batch_size * self.current_ind
+                end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
+                x_i = self.xs[start_ind:end_ind, ...]
+                y_i = self.ys[start_ind:end_ind, ...]
+                temporal_idx_x_i = None
+                temporal_idx_y_i = None
+                x_mask_i = None
+                y_mask_i = None
+                if self.temporal_idx_xs is not None:
+                    temporal_idx_x_i = self.temporal_idx_xs[start_ind:end_ind, ...]
+                if self.temporal_idx_ys is not None:
+                    temporal_idx_y_i = self.temporal_idx_ys[start_ind:end_ind, ...]
+                if self.x_masks is not None:
+                    x_mask_i = self.x_masks[start_ind:end_ind, ...]
+                if self.y_masks is not None:
+                    y_mask_i = self.y_masks[start_ind:end_ind, ...]
+                yield (x_i, y_i, temporal_idx_x_i, temporal_idx_y_i, x_mask_i, y_mask_i)
                 self.current_ind += 1
 
         return _wrapper()
@@ -104,6 +144,10 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         cat_data = np.load(os.path.join(dataset_dir, category + ".npz"))
         data["x_" + category] = cat_data["x"]
         data["y_" + category] = cat_data["y"]
+        if "x_mask" in cat_data:
+            data["x_mask_" + category] = cat_data["x_mask"].astype(bool)
+        if "y_mask" in cat_data:
+            data["y_mask_" + category] = cat_data["y_mask"].astype(bool)
         temporal_idx_x = None
         temporal_idx_y = None
         if "temporal_idx_x" in cat_data:
@@ -147,6 +191,10 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
     random_train = torch.randperm(random_train.size(0))
     data["x_train"] = data["x_train"][random_train, ...]
     data["y_train"] = data["y_train"][random_train, ...]
+    if "x_mask_train" in data:
+        data["x_mask_train"] = data["x_mask_train"][random_train, ...]
+    if "y_mask_train" in data:
+        data["y_mask_train"] = data["y_mask_train"][random_train, ...]
     if "temporal_idx_x_train" in data:
         data["temporal_idx_x_train"] = data["temporal_idx_x_train"][random_train, ...]
     if "temporal_idx_y_train" in data:
@@ -163,6 +211,8 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         batch_size,
         temporal_idx_xs=data.get("temporal_idx_x_train"),
         temporal_idx_ys=data.get("temporal_idx_y_train"),
+        x_masks=data.get("x_mask_train"),
+        y_masks=data.get("y_mask_train"),
     )
     data["val_loader"] = DataLoader(
         data["x_val"],
@@ -170,6 +220,8 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         valid_batch_size,
         temporal_idx_xs=data.get("temporal_idx_x_val"),
         temporal_idx_ys=data.get("temporal_idx_y_val"),
+        x_masks=data.get("x_mask_val"),
+        y_masks=data.get("y_mask_val"),
     )
     data["test_loader"] = DataLoader(
         data["x_test"],
@@ -177,6 +229,8 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size=None, test_batch_size
         test_batch_size,
         temporal_idx_xs=data.get("temporal_idx_x_test"),
         temporal_idx_ys=data.get("temporal_idx_y_test"),
+        x_masks=data.get("x_mask_test"),
+        y_masks=data.get("y_mask_test"),
     )
     data["scaler"] = scaler
 
@@ -219,4 +273,54 @@ def metric(pred, real):
     mape = MAPE_torch(pred, real,0).item()
     wmape = WMAPE_torch(pred, real, 0).item()
     rmse = RMSE_torch(pred, real, 0).item()
+    return mae, mape, rmse, wmape
+
+
+def _masked_select_valid(pred, true, mask, require_positive_true=False):
+    valid = mask.bool()
+    if require_positive_true:
+        valid = valid & torch.gt(true, 0)
+    if not torch.any(valid):
+        zero = torch.zeros((), device=pred.device, dtype=pred.dtype)
+        return zero, zero, False
+    return torch.masked_select(pred, valid), torch.masked_select(true, valid), True
+
+
+def MAE_masked_torch(pred, true, mask):
+    pred_valid, true_valid, has_valid = _masked_select_valid(pred, true, mask)
+    if not has_valid:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+    return torch.mean(torch.abs(true_valid - pred_valid))
+
+
+def MAPE_masked_torch(pred, true, mask):
+    pred_valid, true_valid, has_valid = _masked_select_valid(
+        pred, true, mask, require_positive_true=True
+    )
+    if not has_valid:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+    return torch.mean(torch.abs(torch.div((true_valid - pred_valid), true_valid)))
+
+
+def RMSE_masked_torch(pred, true, mask):
+    pred_valid, true_valid, has_valid = _masked_select_valid(pred, true, mask)
+    if not has_valid:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+    return torch.sqrt(torch.mean((pred_valid - true_valid) ** 2))
+
+
+def WMAPE_masked_torch(pred, true, mask):
+    pred_valid, true_valid, has_valid = _masked_select_valid(
+        pred, true, mask, require_positive_true=True
+    )
+    if not has_valid:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+    return torch.sum(torch.abs(pred_valid - true_valid)) / torch.sum(torch.abs(true_valid)).clamp_min(1e-6)
+
+
+def metric_masked(pred, real, mask):
+    mae = MAE_masked_torch(pred, real, mask).item()
+    mape = MAPE_masked_torch(pred, real, mask).item()
+    wmape = WMAPE_masked_torch(pred, real, mask).item()
+    rmse = RMSE_masked_torch(pred, real, mask).item()
     return mae, mape, rmse, wmape

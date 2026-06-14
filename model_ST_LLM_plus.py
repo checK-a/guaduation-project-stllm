@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as Fuct
 from peft import LoraConfig, get_peft_model
-from transformers import GPT2Model
+from transformers import GPT2Config, GPT2Model
 
 
 class TemporalEmbedding(nn.Module):
@@ -87,46 +87,78 @@ class BaseModelOutputWithPastAndCrossAttentions:
 
 
 class PFA(nn.Module):
-    def __init__(self, device="cuda:0", gpt_layers=6, U=1, dropout_rate=0.0):
+    def __init__(
+        self,
+        device="cuda:0",
+        gpt_layers=6,
+        U=1,
+        dropout_rate=0.0,
+        graph_injection_layers=None,
+        llm_init="pretrained",
+        lora_mode="lora",
+        freeze_gpt=False,
+    ):
         super(PFA, self).__init__()
         gpt2_path = "/root/gpt2_weights" if os.path.exists("/root/gpt2_weights") else "gpt2"
-        self.gpt2 = GPT2Model.from_pretrained(
-            gpt2_path,
-            attn_implementation="eager",
-            output_attentions=True,
-            output_hidden_states=True,
-        )
+        if llm_init == "pretrained":
+            self.gpt2 = GPT2Model.from_pretrained(
+                gpt2_path,
+                attn_implementation="eager",
+                output_attentions=True,
+                output_hidden_states=True,
+            )
+        elif llm_init == "random":
+            config = GPT2Config.from_pretrained(gpt2_path)
+            config.attn_implementation = "eager"
+            config.output_attentions = True
+            config.output_hidden_states = True
+            self.gpt2 = GPT2Model(config)
+        else:
+            raise ValueError(f"Unsupported llm_init: {llm_init}")
+        if lora_mode not in {"lora", "none"}:
+            raise ValueError(f"Unsupported lora_mode: {lora_mode}")
 
         self.gpt2.h = self.gpt2.h[:gpt_layers]
         self.U = U
+        if graph_injection_layers is None:
+            graph_injection_layers = U
+        self.graph_injection_layers = max(0, min(int(graph_injection_layers), gpt_layers))
         self.device = device
         self.dropout_rate = dropout_rate
         self.dropout = nn.Dropout(p=self.dropout_rate)
         self.lora_rank = 16
+        self.llm_init = llm_init
+        self.lora_mode = lora_mode
+        self.freeze_gpt = bool(freeze_gpt)
 
-        unfrozen_layer_indices = list(range(gpt_layers - self.U, gpt_layers))
-        lora_target_modules = [f"h.{i}.attn.c_attn" for i in unfrozen_layer_indices]
-        self.lora_config = LoraConfig(
-            r=self.lora_rank,
-            lora_alpha=32,
-            lora_dropout=self.dropout_rate,
-            target_modules=lora_target_modules,
-            bias="none",
-        )
-        self.gpt2 = get_peft_model(self.gpt2, self.lora_config)
+        if self.lora_mode == "lora":
+            unfrozen_layer_indices = list(range(gpt_layers - self.U, gpt_layers))
+            lora_target_modules = [f"h.{i}.attn.c_attn" for i in unfrozen_layer_indices]
+            self.lora_config = LoraConfig(
+                r=self.lora_rank,
+                lora_alpha=32,
+                lora_dropout=self.dropout_rate,
+                target_modules=lora_target_modules,
+                bias="none",
+            )
+            self.gpt2 = get_peft_model(self.gpt2, self.lora_config)
 
-        for layer_index, layer in enumerate(self.gpt2.h):
-            for name, param in layer.named_parameters():
-                if layer_index < gpt_layers - self.U:
-                    if "ln" in name or "wpe" in name:
-                        param.requires_grad = True
+        if self.freeze_gpt:
+            for param in self.gpt2.parameters():
+                param.requires_grad = False
+        else:
+            for layer_index, layer in enumerate(self.gpt2.h):
+                for name, param in layer.named_parameters():
+                    if layer_index < gpt_layers - self.U:
+                        if "ln" in name or "wpe" in name:
+                            param.requires_grad = True
+                        else:
+                            param.requires_grad = False
                     else:
-                        param.requires_grad = False
-                else:
-                    if "mlp" in name:
-                        param.requires_grad = False
-                    else:
-                        param.requires_grad = True
+                        if "mlp" in name:
+                            param.requires_grad = False
+                        else:
+                            param.requires_grad = True
 
     def custom_forward(
         self,
@@ -191,7 +223,7 @@ class PFA(nn.Module):
         total_layers = len(self.gpt2.h)
         for i, (block, layer_past) in enumerate(zip(self.gpt2.h, past_key_values)):
             layer_attention_mask = attention_mask.to(hidden_states.device) if attention_mask is not None else None
-            if i >= total_layers - self.U:
+            if i >= total_layers - self.graph_injection_layers:
                 if adjacency_matrix is not None:
                     adjacency_bias = adjacency_matrix.to(hidden_states.device).float()
                     layer_attention_mask = (
@@ -299,12 +331,33 @@ class EncoderBackboneMixin:
         nn.init.xavier_uniform_(self.node_emb)
         self.in_layer = nn.Conv2d(self.gpt_channel * 3, self.hidden_dim, kernel_size=(1, 1))
         self.dropout = nn.Dropout(p=self.dropout_rate)
-        self.gpt = PFA(
-            device=self.device,
-            gpt_layers=self.llm_layer,
-            U=self.U,
-            dropout_rate=self.dropout_rate,
-        )
+        encoder_type = getattr(self, "encoder_type", "llm")
+        if encoder_type == "transformer":
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=self.hidden_dim,
+                nhead=8,
+                dim_feedforward=self.hidden_dim * 4,
+                dropout=self.dropout_rate,
+                batch_first=True,
+                activation="gelu",
+            )
+            self.transformer_encoder = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=max(1, int(self.llm_layer)),
+            )
+            self.transformer_norm = nn.LayerNorm(self.hidden_dim)
+            self.gpt = None
+        else:
+            self.gpt = PFA(
+                device=self.device,
+                gpt_layers=self.llm_layer,
+                U=self.U,
+                dropout_rate=self.dropout_rate,
+                graph_injection_layers=getattr(self, "llm_graph_injection_layers", None),
+                llm_init=getattr(self, "llm_init", "pretrained"),
+                lora_mode=getattr(self, "lora_mode", "lora"),
+                freeze_gpt=getattr(self, "freeze_gpt", False),
+            )
 
     def encode_base(self, history_data, temporal_idx_x=None):
         data = history_data.permute(0, 3, 2, 1)
@@ -343,7 +396,20 @@ class EncoderBackboneMixin:
         if fusion_mode == "none":
             return base_encoded
 
-        llm_encoded = self.gpt(base_encoded, self.adj_mx)
+        encoder_type = getattr(self, "encoder_type", "llm")
+        if encoder_type == "transformer":
+            llm_encoded = self.transformer_norm(self.transformer_encoder(base_encoded))
+        else:
+            encoder_adj = self.adj_mx
+            llm_graph_mode = getattr(
+                self,
+                "llm_graph_mode",
+                getattr(self, "graph_mode", "adjacency"),
+            )
+            if llm_graph_mode == "identity" and hasattr(self, "identity_adj_mx"):
+                encoder_adj = self.identity_adj_mx.to(base_encoded.device, base_encoded.dtype)
+            llm_encoded = self.gpt(base_encoded, encoder_adj)
+
         if fusion_mode == "direct":
             return llm_encoded
         if fusion_mode == "residual_gate":
@@ -595,6 +661,17 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         llm_fusion_mode="direct",
         param_generator="mlp",
         param_attn_heads=4,
+        encoder_type="llm",
+        graph_mode="adjacency",
+        llm_graph_mode=None,
+        mech_graph_mode=None,
+        llm_graph_injection_layers=None,
+        use_temporal_gate=True,
+        temporal_gate_mode=None,
+        temporal_gate_init=-1.0,
+        llm_init="pretrained",
+        lora_mode="lora",
+        freeze_gpt=False,
     ):
         super().__init__()
         self.device = device
@@ -611,6 +688,19 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         self.llm_fusion_mode = llm_fusion_mode
         self.param_generator = param_generator
         self.param_attn_heads = int(param_attn_heads)
+        self.encoder_type = encoder_type
+        self.graph_mode = graph_mode
+        self.llm_graph_mode = llm_graph_mode or graph_mode
+        self.mech_graph_mode = mech_graph_mode or graph_mode
+        self.llm_graph_injection_layers = llm_graph_injection_layers
+        if temporal_gate_mode is None:
+            temporal_gate_mode = "learnable" if bool(use_temporal_gate) else "zero"
+        self.temporal_gate_mode = temporal_gate_mode
+        self.use_temporal_gate = self.temporal_gate_mode == "learnable"
+        self.temporal_gate_init = float(temporal_gate_init)
+        self.llm_init = llm_init
+        self.lora_mode = lora_mode
+        self.freeze_gpt = bool(freeze_gpt)
 
         supported_modes = {"full", "no_mech", "mech_only", "no_llm", "fixed_params"}
         if self.ablation_mode not in supported_modes:
@@ -621,6 +711,23 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         supported_param_generators = {"mlp", "cross_attn", "temporal_cross_attn"}
         if self.param_generator not in supported_param_generators:
             raise ValueError(f"Unsupported param_generator: {self.param_generator}")
+        supported_encoder_types = {"llm", "transformer"}
+        if self.encoder_type not in supported_encoder_types:
+            raise ValueError(f"Unsupported encoder_type: {self.encoder_type}")
+        if self.llm_init not in {"pretrained", "random"}:
+            raise ValueError(f"Unsupported llm_init: {self.llm_init}")
+        if self.lora_mode not in {"lora", "none"}:
+            raise ValueError(f"Unsupported lora_mode: {self.lora_mode}")
+        supported_graph_modes = {"adjacency", "identity"}
+        if self.graph_mode not in supported_graph_modes:
+            raise ValueError(f"Unsupported graph_mode: {self.graph_mode}")
+        if self.llm_graph_mode not in supported_graph_modes:
+            raise ValueError(f"Unsupported llm_graph_mode: {self.llm_graph_mode}")
+        if self.mech_graph_mode not in supported_graph_modes:
+            raise ValueError(f"Unsupported mech_graph_mode: {self.mech_graph_mode}")
+        supported_temporal_gate_modes = {"learnable", "zero", "one"}
+        if self.temporal_gate_mode not in supported_temporal_gate_modes:
+            raise ValueError(f"Unsupported temporal_gate_mode: {self.temporal_gate_mode}")
         if self.hidden_dim % self.param_attn_heads != 0:
             raise ValueError(
                 f"hidden_dim={self.hidden_dim} must be divisible by param_attn_heads={self.param_attn_heads}."
@@ -629,6 +736,11 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         adj_tensor = torch.tensor(adj_mx, dtype=torch.float32)
         self.adj_mx = adj_tensor.to(self.device)
         self.register_buffer("adj_mx_norm", self._normalize_adjacency(adj_tensor), persistent=False)
+        self.register_buffer(
+            "identity_adj_mx",
+            torch.eye(self.num_nodes, dtype=torch.float32),
+            persistent=False,
+        )
 
         self._init_encoder_backbone()
         self.llm_gate_head = nn.Sequential(
@@ -669,7 +781,9 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     dropout=self.dropout_rate,
                     batch_first=True,
                 )
-                self.param_temporal_attn_gate_logit = nn.Parameter(torch.tensor(-1.0))
+                self.param_temporal_attn_gate_logit = nn.Parameter(
+                    torch.tensor(self.temporal_gate_init)
+                )
                 self.param_temporal_norm = nn.LayerNorm(self.hidden_dim)
                 self.param_temporal_ffn = nn.Sequential(
                     nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -677,7 +791,9 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
                     nn.Dropout(self.dropout_rate),
                     nn.Linear(self.hidden_dim, self.hidden_dim),
                 )
-                self.param_temporal_ffn_gate_logit = nn.Parameter(torch.tensor(-1.0))
+                self.param_temporal_ffn_gate_logit = nn.Parameter(
+                    torch.tensor(self.temporal_gate_init)
+                )
                 self.param_temporal_ffn_norm = nn.LayerNorm(self.hidden_dim)
             self.param_cross_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
@@ -755,8 +871,11 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             self.start_conv,
             self.temporal_emb,
             self.in_layer,
-            self.gpt,
         ]
+        if getattr(self, "gpt", None) is not None:
+            encoder_modules.append(self.gpt)
+        if hasattr(self, "transformer_encoder"):
+            encoder_modules.extend([self.transformer_encoder, self.transformer_norm])
         self.node_emb.requires_grad = False
         for module in encoder_modules:
             for param in module.parameters():
@@ -764,6 +883,13 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
 
     def enable_joint_tuning_stage3(self):
         self.freeze_encoder_for_stage2()
+        if getattr(self, "gpt", None) is None:
+            if hasattr(self, "transformer_encoder"):
+                for param in self.transformer_encoder.parameters():
+                    param.requires_grad = True
+                for param in self.transformer_norm.parameters():
+                    param.requires_grad = True
+            return
         for name, param in self.gpt.named_parameters():
             if "lora_" in name:
                 param.requires_grad = True
@@ -827,6 +953,13 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         gamma = torch.sigmoid(self.gamma_token_head(param_tokens))
         return beta, gamma
 
+    def _temporal_gate_value(self, gate_logit, reference_tokens):
+        if self.temporal_gate_mode == "learnable":
+            return torch.sigmoid(gate_logit)
+        if self.temporal_gate_mode == "one":
+            return torch.ones((), device=reference_tokens.device, dtype=reference_tokens.dtype)
+        return torch.zeros((), device=reference_tokens.device, dtype=reference_tokens.dtype)
+
     def _predict_parameters_temporal_cross_attn(self, encoded, global_context):
         query_tokens = self._build_param_query_tokens(encoded, global_context)
         batch_size, _, num_nodes, _ = query_tokens.shape
@@ -839,12 +972,18 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
             value=temporal_tokens,
             need_weights=False,
         )
-        temporal_attn_gate = torch.sigmoid(self.param_temporal_attn_gate_logit)
+        temporal_attn_gate = self._temporal_gate_value(
+            self.param_temporal_attn_gate_logit,
+            temporal_tokens,
+        )
         temporal_tokens = self.param_temporal_norm(
             temporal_tokens + temporal_attn_gate * temporal_output
         )
         temporal_ffn_output = self.param_temporal_ffn(temporal_tokens)
-        temporal_ffn_gate = torch.sigmoid(self.param_temporal_ffn_gate_logit)
+        temporal_ffn_gate = self._temporal_gate_value(
+            self.param_temporal_ffn_gate_logit,
+            temporal_tokens,
+        )
         temporal_tokens = self.param_temporal_ffn_norm(
             temporal_tokens + temporal_ffn_gate * temporal_ffn_output
         )
@@ -907,7 +1046,9 @@ class EpiSTLLMPlus(nn.Module, EncoderBackboneMixin):
         for horizon_index in range(self.output_len):
             beta_t = beta[:, horizon_index]
             gamma_t = gamma[:, horizon_index]
-            lambda_t = torch.einsum("nm,bmd->bnd", self.adj_mx_norm, i_prev)
+            rollout_adj = self.identity_adj_mx if self.mech_graph_mode == "identity" else self.adj_mx_norm
+            rollout_adj = rollout_adj.to(i_prev.device, i_prev.dtype)
+            lambda_t = torch.einsum("nm,bmd->bnd", rollout_adj, i_prev)
 
             inf_base = Fuct.softplus(self.infection_mlp(torch.cat([s_prev, lambda_t], dim=-1)))
             rec_base = Fuct.softplus(self.recovery_mlp(i_prev))
