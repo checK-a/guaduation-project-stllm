@@ -1444,6 +1444,12 @@ def main():
         raise RuntimeError("CUDA was requested but is unavailable. Use --device cpu to run on CPU.")
     args.cuda = device.type == "cuda"
     if args.profile_resources and device.type == "cuda":
+        # Ensure the CUDA context is initialized before touching memory stats;
+        # reset_peak_memory_stats raises "Invalid device argument" if called
+        # before any CUDA allocation has created a context on the device.
+        if device.index is not None:
+            torch.cuda.set_device(device)
+        torch.cuda.init()
         torch.cuda.reset_peak_memory_stats(device.index)
     dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
     scaler = dataloader["scaler"]
